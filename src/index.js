@@ -1,77 +1,61 @@
 export default {
   async fetch(request, env, ctx) {
-    let fetchStatus = "Synced live from SAB Wiki API (All Categories)";
+    let fetchStatus = "Synced live from SAB Wiki API (Per-Rarity Categories)";
     let brainrotEntries = [];
     let machinesList = [];
     let raritiesList = [];
 
-    // Comprehensive list of pages to fetch directly so we don't miss any entries across namespaces or categories
-    const allSourcePages = [
-      "Common", "Rare", "Epic", "Legendary", "Mythic", "Brainrot_God", "Secret", "OG",
-      "Category:Brainrots", "Category:Common", "Category:Rare", "Category:Epic", 
-      "Category:Legendary", "Category:Mythic", "Category:Brainrot_God", "Category:Secret", "Category:OG",
-      "Category:Machines", "Category:Rarities"
+    const raritiesMapTarget = [
+      { key: "Common", label: "Common" },
+      { key: "Rare", label: "Rare" },
+      { key: "Epic", label: "Epic" },
+      { key: "Legendary", label: "Legendary" },
+      { key: "Mythic", label: "Mythic" },
+      { key: "Brainrot_God", label: "Brainrot God" },
+      { key: "Secret", label: "Secret" },
+      { key: "OG", label: "OG" }
     ];
 
-    let discoveredTitles = new Set();
-    let rarityMap = {};
+    let discoveredMap = new Map(); // title -> rarity
 
-    // 1. Direct page links / parse extraction
-    const rarityPages = ["Common", "Rare", "Epic", "Legendary", "Mythic", "Brainrot_God", "Secret", "OG"];
-    for (let rPage of rarityPages) {
-      try {
-        const apiUrl = `https://stealabrainrot.fandom.com/api.php?action=parse&page=${rPage}&prop=links&format=json`;
-        const res = await fetch(apiUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
-        if (res.ok) {
+    // Fetch members directly from each category page to get accurate rarities matching the wiki
+    for (let r of raritiesMapTarget) {
+      let cmcontinueParam = "";
+      let loops = 0;
+      
+      while (loops < 5) {
+        try {
+          const apiUrl = `https://stealabrainrot.fandom.com/api.php?action=query&list=categorymembers&cmtitle=Category:${r.key}&cmlimit=500&format=json${cmcontinueParam}`;
+          const res = await fetch(apiUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
+          if (!res.ok) break;
           const data = await res.json();
-          const links = data?.parse?.links || [];
-          links.forEach(l => {
-            let title = l["*"];
-            if (title && !title.includes("Category:") && !title.includes("Help:") && !title.includes("File:") && !title.includes("Special:") && !title.includes("Talk:") && !title.includes("User:")) {
-              let formattedRarity = rPage.replace("_", " ");
-              rarityMap[title] = formattedRarity;
-              discoveredTitles.add(title);
+          const members = data?.query?.categorymembers || [];
+
+          members.forEach(m => {
+            let title = m.title.replace(/_/g, " ");
+            // Filter out unwanted namespaces
+            if (m.ns === 0 && !title.startsWith("Category:") && !title.startsWith("File:") && !title.startsWith("Template:") && !title.startsWith("User:")) {
+              discoveredMap.set(title, r.label);
             }
           });
-        }
-      } catch (err) {}
-    }
 
-    // 2. Comprehensive deep pagination for allpages (reaches all 482+ wiki pages directly)
-    let apcontinueParam = "";
-    let apLoops = 0;
-    while (apLoops < 15) {
-      try {
-        const apiUrl = `https://stealabrainrot.fandom.com/api.php?action=query&list=allpages&aplimit=500&format=json${apcontinueParam}`;
-        const res = await fetch(apiUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
-        if (!res.ok) break;
-        const data = await res.json();
-        const pages = data?.query?.allpages || [];
-        
-        pages.forEach(p => {
-          let title = p.title.replace(/_/g, " ");
-          if (!title.startsWith("Category:") && !title.startsWith("File:") && !title.startsWith("Template:") && !title.startsWith("User:") && title !== "Steal a Brainrot Wiki") {
-            discoveredTitles.add(title);
+          if (data && data.continue && data.continue.cmcontinue) {
+            cmcontinueParam = `&cmcontinue=${encodeURIComponent(data.continue.cmcontinue)}`;
+            loops++;
+          } else {
+            break;
           }
-        });
-
-        if (data && data.continue && data.continue.apcontinue) {
-          apcontinueParam = `&apcontinue=${encodeURIComponent(data.continue.apcontinue)}`;
-          apLoops++;
-        } else {
+        } catch (e) {
           break;
         }
-      } catch (e) {
-        break;
       }
     }
 
-    // Map discovered titles to final structure
-    let titleArray = Array.from(discoveredTitles);
-    brainrotEntries = titleArray.map(name => {
-      let rarity = rarityMap[name] || rarityMap[name.replace(/ /g, "_")] || "Unclassified / Live Index";
-      return { name, rarity };
-    });
+    // Convert map to final entry list sorted alphabetically or natively
+    brainrotEntries = Array.from(discoveredMap.entries()).map(([name, rarity]) => ({
+      name,
+      rarity
+    }));
 
     if (brainrotEntries.length === 0) {
       fetchStatus = "Live API Fetch Failed: No items returned.";
@@ -103,7 +87,7 @@ export default {
 
     let rawMarkdown = `# SAB Master Reference Book (Full Wiki Deep-Sync)
 
-> Complete live inventory capturing all 482+ wiki pages and mapping individual rarities via deep pagination with zero cache defaults.
+> Complete live inventory capturing all core wiki pages and mapping individual rarities directly via their specific category endpoints.
 > ⚠️ Fully synchronized live ledger.
 
 ---
@@ -175,7 +159,7 @@ ${machinesList.map((m, i) => `${i + 1}. **${m}**`).join('\n')}
 ---
 
 # UPDATE LOG
-- **Deep Pagination Sync Engine**: Bypasses standard limits using multi-loop allpages queries to capture all 482+ wiki entries and rarities without fallback defaults.
+- **Category-Based Sync Engine**: Pulls items directly from respective category endpoints (`Category:Common`, `Category:Secret`, etc.) to ensure accurate rarity alignment.
 - **Update 3**: Addition of advanced processing utilities, Trait Incubator systems, and high-tier cosmic mutations.
 - **Update 2**: Expansion of mutations (Gold, Diamond, Bloodrot) and introduction of secret characters.
 - **Release / Update 1**: Introduction of core base gameplay, baseline brainrots, and the OG Fuse Machine.
@@ -192,7 +176,7 @@ ${brainrotEntries.length > 0 ? brainrotEntries.map((b, i) => `${i + 1}. **${b.na
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>SAB Master Reference Book - Full Deep-Sync</title>
+<title>SAB Master Reference Book - Category Sync</title>
 <style>
   body {
     margin: 0;
@@ -216,7 +200,7 @@ ${brainrotEntries.length > 0 ? brainrotEntries.map((b, i) => `${i + 1}. **${b.na
   }
 </style>
 </head>
-<body><div id="content">Deep-syncing all 482+ wiki entries and mapping rarities live...</div>
+<body><div id="content">Syncing wiki items via per-rarity categories...</div>
 <script>
 (function(){
   try {
