@@ -5,17 +5,33 @@ export default {
     let machinesList = [];
     let raritiesList = [];
 
-    // Fetch members specifically from Category:Brainrots using MediaWiki query API without fallback defaults
-    const apiUrl = "https://stealabrainrot.fandom.com/api.php?action=query&list=categorymembers&cmtitle=Category:Brainrots&cmlimit=500&format=json";
-    const res = await fetch(apiUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
+    // Paginate through Category:Brainrots to fetch every single brainrot dynamically without cache defaults
+    let cmcontinueParam = "";
+    let fetchLoops = 0;
 
-    if (res.ok) {
+    while (fetchLoops < 10) {
+      const apiUrl = `https://stealabrainrot.fandom.com/api.php?action=query&list=categorymembers&cmtitle=Category:Brainrots&cmlimit=500&format=json${cmcontinueParam}`;
+      const res = await fetch(apiUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
+
+      if (!res.ok) break;
+
       const data = await res.json();
       const members = data?.query?.categorymembers || [];
-      brainrotCategoryPages = members.map(m => m.title.replace(/_/g, " "));
-    } else {
-      fetchStatus = "Live API Fetch Failed: No fallback cache permitted.";
-      brainrotCategoryPages = [];
+      
+      members.forEach(m => {
+        brainrotCategoryPages.push(m.title.replace(/_/g, " "));
+      });
+
+      if (data && data.continue && data.continue.cmcontinue) {
+        cmcontinueParam = `&cmcontinue=${encodeURIComponent(data.continue.cmcontinue)}`;
+        fetchLoops++;
+      } else {
+        break;
+      }
+    }
+
+    if (brainrotCategoryPages.length === 0) {
+      fetchStatus = "Live API Fetch Failed: No category members returned.";
     }
 
     // Comprehensive Machines (Newest to Oldest)
@@ -42,9 +58,9 @@ export default {
       "OG (Best / Highest Collector Tier)"
     ];
 
-    let rawMarkdown = `# SAB Master Reference Book (Live Auto-Sync Clean)
+    let rawMarkdown = `# SAB Master Reference Book (Complete Live Brainrots Sync)
 
-> Automatically pulling all entries directly from Category:Brainrots on the SAB Wiki without cache defaults.
+> Automatically pulling every single brainrot from Category:Brainrots on the SAB Wiki with full pagination and zero cache defaults.
 > ⚠️ Fully synchronized live ledger.
 
 ---
@@ -116,7 +132,7 @@ ${machinesList.map((m, i) => `${i + 1}. **${m}**`).join('\n')}
 ---
 
 # UPDATE LOG
-- **Live Auto-Sync Engine**: Directly queries live wiki categories without reliance on fallback caches.
+- **Complete Category:Brainrots Engine**: Fully paginates and extracts every single live brainrot item without fallback defaults.
 - **Update 3**: Addition of advanced processing utilities, Trait Incubator systems, and high-tier cosmic mutations.
 - **Update 2**: Expansion of mutations (Gold, Diamond, Bloodrot) and introduction of secret characters.
 - **Release / Update 1**: Introduction of core base gameplay, baseline brainrots, and the OG Fuse Machine.
@@ -133,7 +149,7 @@ ${brainrotCategoryPages.length > 0 ? brainrotCategoryPages.map((b, i) => `${i + 
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>SAB Master Reference Book - Live Auto-Sync</title>
+<title>SAB Master Reference Book - Complete Brainrots</title>
 <style>
   body {
     margin: 0;
@@ -154,7 +170,7 @@ ${brainrotCategoryPages.length > 0 ? brainrotCategoryPages.map((b, i) => `${i + 
   }
 </style>
 </head>
-<body><div id="content">Synchronizing Category:Brainrots live index without defaults...</div>
+<body><div id="content">Fetching every single brainrot from live wiki category...</div>
 <script>
 (function(){
   try {
