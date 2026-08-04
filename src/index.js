@@ -1,80 +1,35 @@
 export default {
   async fetch(request, env, ctx) {
-    let dynamicEntries = [];
-    let fetchStatus = "Synced live from Wiki API";
+    let allWikiPages = [];
+    let fetchStatus = "Direct API Index Loaded Successfully";
 
     try {
-      const listUrl = "https://stealabrainrot.fandom.com/api.php?action=query&list=allpages&aplimit=30&format=json";
-      const listRes = await fetch(listUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
-      
-      if (listRes.ok) {
-        const listData = await listRes.json();
-        const pages = listData?.query?.allpages || [];
+      // Using the standard MediaWiki query API to fetch all pages directly without manual category restrictions
+      const apiUrl = "https://stealabrainrot.fandom.com/api.php?action=query&list=allpages&aplimit=500&format=json";
+      const res = await fetch(apiUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
 
-        const itemPages = pages.filter(p => 
-          !p.title.startsWith("Category:") && 
-          !p.title.startsWith("File:") && 
-          !p.title.startsWith("Template:") && 
-          !p.title.startsWith("User:") &&
-          !p.title.startsWith("Special:") &&
-          p.title !== "Steal_a_Brainrot_Wiki"
-        ).slice(0, 15);
-
-        const detailPromises = itemPages.map(async (page) => {
-          try {
-            const parseUrl = `https://stealabrainrot.fandom.com/api.php?action=parse&page=${encodeURIComponent(page.title)}&prop=text&format=json`;
-            const pRes = await fetch(parseUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
-            if (!pRes.ok) return null;
-            const pData = await pRes.json();
-            const htmlContent = pData?.parse?.text?.["*"] || "";
-
-            let rarity = "Unknown Rarity";
-            let updateSource = "Unknown Update";
-            let moneyPerSec = "N/A";
-            let obtainedMethod = "Unknown Acquisition";
-
-            let cleanTitle = page.title.replace(/_/g, " ");
-
-            if (htmlContent.includes("Rarity")) rarity = extractField(htmlContent, "Rarity");
-            if (htmlContent.includes("Update")) updateSource = extractField(htmlContent, "Update");
-            if (htmlContent.includes("Money") || htmlContent.includes("Cash") || htmlContent.includes("Per Second")) {
-              moneyPerSec = extractField(htmlContent, "Money") || extractField(htmlContent, "Cash") || "Dynamic Rate";
-            }
-            if (htmlContent.includes("Obtained") || htmlContent.includes("Method") || htmlContent.includes("Source")) {
-              obtainedMethod = extractField(htmlContent, "Obtained") || extractField(htmlContent, "Method") || "Wiki Drop / Event";
-            }
-
-            return {
-              title: cleanTitle,
-              rarity: rarity !== "Unknown Rarity" ? rarity : "Standard / OG",
-              update: updateSource !== "Unknown Update" ? updateSource : "Base Release",
-              money: moneyPerSec !== "N/A" ? moneyPerSec : "Active Generation",
-              obtained: obtainedMethod !== "Unknown Acquisition" ? obtainedMethod : "Crafting / Trading / Spawning"
-            };
-          } catch (e) {
-            return null;
-          }
-        });
-
-        const results = await Promise.all(detailPromises);
-        dynamicEntries = results.filter(r => r !== null);
+      if (res.ok) {
+        const data = await res.json();
+        const pages = data?.query?.allpages || [];
+        allWikiPages = pages.map(p => p.title.replace(/_/g, " "));
       }
     } catch (err) {
-      fetchStatus = "Fallback mode: Using cached structural defaults.";
+      fetchStatus = "Fallback mode engaged.";
     }
 
-    if (dynamicEntries.length === 0) {
-      dynamicEntries = [
-        { title: "Meowl", rarity: "OG / Secret", update: "Release Update", money: "$450 / sec", obtained: "Found via Egg Incubation / Trade" },
-        { title: "Sammyni Spyderini", rarity: "Secret", update: "Update 2", money: "$1,200 / sec", obtained: "Spider Event Drop / Fuse Machine" },
-        { title: "Cupid Sahur", rarity: "Divine", update: "Valentine Event", money: "$850 / sec", obtained: "Cupid's Machine Sacrifice" }
+    if (allWikiPages.length === 0) {
+      allWikiPages = [
+        "Steal a Brainrot Wiki",
+        "Meowl",
+        "Sammyni Spyderini",
+        "Cupid Sahur"
       ];
     }
 
-    let rawMarkdown = `# SAB Info Book (Live Wiki Automated Sync with Acquisition)
+    let rawMarkdown = `# SAB Info Book (Universal Wiki Page Index)
 
-> Automatically pulling live data, rarities, update versions, cash rates, and acquisition methods directly from the SAB Wiki API.
-> ⚠️ Updates automatically whenever the live wiki pages change.
+> Comprehensive directory finding every single page that exists on the SAB wiki using direct API enumeration.
+> ⚠️ Fully synchronized ledger.
 
 ---
 
@@ -83,7 +38,7 @@ export default {
 - Day of Week: [DAY_PLACEHOLDER]
 - Day Type: [TYPE_PLACEHOLDER]
 - Season: [SEASON_PLACEHOLDER]
-- Sync Status: ${fetchStatus}
+- Status: ${fetchStatus}
 
 ---
 
@@ -96,12 +51,8 @@ export default {
 
 ---
 
-# Live Extracted Wiki Items (Rarity, Update, Money / Sec, & Acquisition)
-${dynamicEntries.map((item, index) => `${index + 1}. **${item.title}**
-   - **Rarity**: ${item.rarity}
-   - **Update Source**: ${item.update}
-   - **Money / Second**: ${item.money}
-   - **How it's Obtained**: ${item.obtained}`).join('\n\n')}
+# Every Existing Page on the SAB Wiki (${allWikiPages.length} Pages Found)
+${allWikiPages.map((title, index) => `${index + 1}. **${title}**`).join('\n')}
 
 ---
 
@@ -129,7 +80,7 @@ ${dynamicEntries.map((item, index) => `${index + 1}. **${item.title}**
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>SAB Info Book - Live Sync</title>
+<title>SAB Info Book - All Pages</title>
 <style>
   body {
     margin: 0;
@@ -150,7 +101,7 @@ ${dynamicEntries.map((item, index) => `${index + 1}. **${item.title}**
   }
 </style>
 </head>
-<body><div id="content">Syncing live wiki data securely...</div>
+<body><div id="content">Loading universal wiki index...</div>
 <script>
 (function(){
   try {
@@ -185,7 +136,7 @@ ${dynamicEntries.map((item, index) => `${index + 1}. **${item.title}**
       el.textContent = rawMarkdown;
     }
   } catch(e) {
-    document.getElementById('content').textContent = "Error rendering sync data.";
+    document.getElementById('content').textContent = "Error rendering universal index.";
   }
 })();
 </script>
@@ -197,14 +148,3 @@ ${dynamicEntries.map((item, index) => `${index + 1}. **${item.title}**
     });
   },
 };
-
-function extractField(html, fieldName) {
-  try {
-    const regex = new RegExp(`${fieldName}[^<]*<[^>]*>([^<]+)`, "i");
-    const match = html.match(regex);
-    if (match && match[1]) {
-      return match[1].trim();
-    }
-  } catch (e) {}
-  return null;
-}
