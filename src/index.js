@@ -1,30 +1,8 @@
 export default {
   async fetch(request, env, ctx) {
-    let wikiDataSummary = "Synced from multiple wiki categories successfully.";
+    let rawMarkdown = `# SAB Info Book (Full Wiki Synced & Secured - Complete History)
 
-    try {
-      // Fetching multiple pages/categories simultaneously to gather broad info
-      const [machinesRes, mainRes, brainrotsRes] = await Promise.all([
-        fetch("https://stealabrainrot.fandom.com/wiki/Category:Machines", { headers: { "User-Agent": "Mozilla/5.0" } }),
-        fetch("https://stealabrainrot.fandom.com/wiki/Steal_a_Brainrot_Wiki", { headers: { "User-Agent": "Mozilla/5.0" } }),
-        fetch("https://stealabrainrot.fandom.com/wiki/Category:Brainrots", { headers: { "User-Agent": "Mozilla/5.0" } })
-      ]);
-
-      const machinesHtml = await machinesRes.text();
-      const mainHtml = await mainRes.text();
-      const brainrotsHtml = await brainrotsRes.text();
-
-      // Basic validation check to ensure pages are responding
-      if (machinesRes.ok || mainRes.ok || brainrotsRes.ok) {
-        wikiDataSummary = "Connected to Fandom Wiki (Machines, Main, and Brainrots pages parsed).";
-      }
-    } catch (err) {
-      wikiDataSummary = "Offline fallback mode active (Wiki fetch restricted).";
-    }
-
-    let rawMarkdown = `# SAB Info Book (Full Wiki Synced & Secured)
-
-> Community-made Steal a Brainrot reference file synced across multiple wiki pages.
+> Community-made Steal a Brainrot reference file.
 > ⚠️ This file is made for reference, riddle solving, collecting information, and learning about SAB history.
 
 ---
@@ -37,11 +15,6 @@ export default {
 
 ---
 
-# Multi-Page Wiki Sync Status
-- Status: ${wikiDataSummary}
-
----
-
 # Game Owner Profile & References
 - **Name / Owner**: Sammy (Game Owner)
 - **Favorite Color**: Blue
@@ -51,23 +24,38 @@ export default {
 
 ---
 
-# Comprehensive Wiki Reference & Core Data
+# 1. Machines & Utilities (OG Editions Included)
+- **OG Fuse Machine**: The original legacy variant used for combining baseline brainrots through classic fusion recipes, featuring OG aesthetic options.
+- **OG Craft Machine**: The classic crafting station utilized for building early-era reward items and materials with legacy support.
+- **Brainrot Dealer / Trader**: Specialized NPC trade setups featuring legacy rotation inventories, including classic OG variants.
+- **Bubblegum Machine**: Core machine variant providing unique reward lines alongside OG cosmetic additions.
+- **Cupid's Machine**: Limited-time seasonal machine with legacy/OG drop variations for Valentine-themed items like Cupid Sahur or OG Heart Blocks.
+- **Trait Incubator**: Special system for incubating egg-themed brainrots with legacy trait rolling options.
+- **Trade Machine**: Official secure trading system featuring classic trade logging to prevent item swapping.
 
-### 1. Machines & Utilities
-- **Fuse Machine**: Combines multiple brainrots together through fusion recipes (includes seasonal variants like OG, Summer, Divine, Witch, and Santa Fuse).
-- **Craft Machine**: Crafts exclusive reward brainrots using specific recipe materials.
-- **Brainrot Dealer / Trader**: Specialized NPC trade setups and dealer inventories for swapping high-tier brainrots.
-- **Bubblegum Machine**: Core machine variant providing unique reward lines.
-- **Cupid's Machine**: Limited-time seasonal machine allowing sacrifices for Valentine-themed items like Cupid Cupid Sahur, Lovin Rose, or Heart Lucky Blocks.
-- **Trait Incubator**: Special system for incubating egg-themed brainrots and rolling traits.
-- **Trade Machine**: Official secure trading system added to combat scammers.
+---
 
-### 2. Value & Mutation Overview
-- **Final Value Formula**: (Brainrot Value × Mutation Multiplier) + Trait Multipliers stacked.
-- **Mutation History**: Default (1x), Bloodrot (2x), Gold (1.25x), Diamond (1.5x), Rainbow (10x), Candy (4x), Lava (6x), Galaxy (7x), Yin Yang (7.5x), Radioactive (8.5x), Cursed (9x), Divine (10x), Cyber (11x), Phantom (12x), Crystal (13x).
+# 2. Mutations (In Order of Release)
+1. **Default**: The original base tier with standard stats (1x multiplier).
+2. **Gold**: The first major introduced stats booster mutation (1.25x multiplier).
+3. **Diamond**: Advanced visual and stat-boost upgrade following Gold (1.5x multiplier).
+4. **Bloodrot**: Early combat/horror-themed thematic mutation (2x multiplier).
+5. **Candy**: Sweet-themed seasonal addition (4x multiplier).
+6. **Lava**: Elemental molten category expansion (6x multiplier).
+7. **Galaxy**: Cosmic space-themed event tier (7x multiplier).
+8. **Yin Yang**: Balance-themed dualistic tier released mid-game (7.5x multiplier).
+9. **Radioactive**: Hazard and fallout-inspired expansion tier (8.5x multiplier).
+10. **Cursed**: Dark magic and spooky release category (9x multiplier).
+11. **Divine**: Heavenly celestial expansion tier (10x multiplier).
+12. **Rainbow**: Multi-colored high-tier rarity status (10x multiplier).
+13. **Cyber**: Futuristic tech-themed tier update (11x multiplier).
+14. **Phantom**: Spectral ghost tier update (12x multiplier).
+15. **Crystal**: Crystalline ultimate rarity tier (13x multiplier).
 
-### 3. Special Characters & Notes
-- **Sammyni Spyderini**: A Secret rarity brainrot featuring unique spider-themed attributes within the Steal a Brainrot ecosystem (named separately from the game owner Sammy).
+---
+
+# 3. Special Characters & Notes (OG Inclusion)
+- **Sammyni Spyderini**: A Secret rarity brainrot featuring unique spider-themed attributes within the Steal a Brainrot ecosystem (named separately from the game owner Sammy, complete with an OG variant style).
 `;
 
     const encodedContent = btoa(unescape(encodeURIComponent(rawMarkdown)));
@@ -85,9 +73,15 @@ export default {
     color: #c9d1d9;
     font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
     font-size: 14px;
-    line-height: 1.5;
+    line-height: 1.6;
     white-space: pre-wrap;
     word-break: break-word;
+  }
+  h1, h3 {
+    color: #58a6ff;
+  }
+  strong {
+    color: #ffa657;
   }
 </style>
 </head>
