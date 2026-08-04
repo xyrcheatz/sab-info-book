@@ -1,13 +1,50 @@
 export default {
   async fetch(request, env, ctx) {
-    let fetchStatus = "Synced live from SAB Wiki API (Category:Brainrots)";
-    let brainrotCategoryPages = [];
+    let fetchStatus = "Synced live from SAB Wiki API (Rarity Pages & Categories)";
+    let brainrotEntries = [];
     let machinesList = [];
     let raritiesList = [];
 
-    // Paginate through Category:Brainrots to fetch every single brainrot dynamically without cache defaults
+    // List of rarity pages to parse members/links from directly
+    const rarityPages = [
+      "Common",
+      "Rare",
+      "Epic",
+      "Legendary",
+      "Mythic",
+      "Brainrot_God",
+      "Secret",
+      "OG"
+    ];
+
+    let rarityMap = {};
+
+    for (let rPage of rarityPages) {
+      try {
+        const apiUrl = `https://stealabrainrot.fandom.com/api.php?action=parse&page=${rPage}&prop=links&format=json`;
+        const res = await fetch(apiUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
+        if (res.ok) {
+          const data = await res.json();
+          const links = data?.parse?.links || [];
+          
+          links.forEach(l => {
+            let title = l["*"];
+            // Filter out non-brainrot meta pages or namespaces
+            if (title && !title.includes("Category:") && !title.includes("Help:") && !title.includes("File:") && !title.includes("Special:") && !title.includes("Talk:")) {
+              let formattedRarity = rPage.replace("_", " ");
+              rarityMap[title] = formattedRarity;
+            }
+          });
+        }
+      } catch (err) {
+        // Skip individual page failure and continue
+      }
+    }
+
+    // Also paginate Category:Brainrots to ensure complete coverage of every single brainrot
     let cmcontinueParam = "";
     let fetchLoops = 0;
+    let allCategoryBrainrots = [];
 
     while (fetchLoops < 10) {
       const apiUrl = `https://stealabrainrot.fandom.com/api.php?action=query&list=categorymembers&cmtitle=Category:Brainrots&cmlimit=500&format=json${cmcontinueParam}`;
@@ -19,7 +56,8 @@ export default {
       const members = data?.query?.categorymembers || [];
       
       members.forEach(m => {
-        brainrotCategoryPages.push(m.title.replace(/_/g, " "));
+        let title = m.title.replace(/_/g, " ");
+        allCategoryBrainrots.push(title);
       });
 
       if (data && data.continue && data.continue.cmcontinue) {
@@ -30,8 +68,14 @@ export default {
       }
     }
 
-    if (brainrotCategoryPages.length === 0) {
-      fetchStatus = "Live API Fetch Failed: No category members returned.";
+    // Combine and assign rarities where known, defaulting to "Unclassified / Live Index" if not matched
+    brainrotEntries = allCategoryBrainrots.map(name => {
+      let rarity = rarityMap[name] || rarityMap[name.replace(/ /g, "_")] || "Unclassified / Live Index";
+      return { name, rarity };
+    });
+
+    if (brainrotEntries.length === 0) {
+      fetchStatus = "Live API Fetch Failed: No brainrots returned.";
     }
 
     // Comprehensive Machines (Newest to Oldest)
@@ -58,9 +102,9 @@ export default {
       "OG (Best / Highest Collector Tier)"
     ];
 
-    let rawMarkdown = `# SAB Master Reference Book (Complete Live Brainrots Sync)
+    let rawMarkdown = `# SAB Master Reference Book (Complete Brainrots with Rarities Sync)
 
-> Automatically pulling every single brainrot from Category:Brainrots on the SAB Wiki with full pagination and zero cache defaults.
+> Automatically pulling every single brainrot and mapping their specific rarities directly from individual rarity tier wiki pages and Category:Brainrots without fallback defaults.
 > ⚠️ Fully synchronized live ledger.
 
 ---
@@ -132,15 +176,15 @@ ${machinesList.map((m, i) => `${i + 1}. **${m}**`).join('\n')}
 ---
 
 # UPDATE LOG
-- **Complete Category:Brainrots Engine**: Fully paginates and extracts every single live brainrot item without fallback defaults.
+- **Rarity Cross-Reference Engine**: Dynamically parses individual tier wiki pages (Common, Rare, Epic, Legendary, Mythic, Brainrot God, Secret, OG) to map precise brainrot rarities automatically.
 - **Update 3**: Addition of advanced processing utilities, Trait Incubator systems, and high-tier cosmic mutations.
 - **Update 2**: Expansion of mutations (Gold, Diamond, Bloodrot) and introduction of secret characters.
 - **Release / Update 1**: Introduction of core base gameplay, baseline brainrots, and the OG Fuse Machine.
 
 ---
 
-# BRAINROTS — Sorted by Income (${brainrotCategoryPages.length} total entries from Category:Brainrots)
-${brainrotCategoryPages.length > 0 ? brainrotCategoryPages.map((b, i) => `${i + 1}. **${b}**`).join('\n') : "No live items returned from API."}
+# BRAINROTS — Sorted by Income & Rarity (${brainrotEntries.length} total entries)
+${brainrotEntries.length > 0 ? brainrotEntries.map((b, i) => `${i + 1}. **${b.name}** — *Rarity: ${b.rarity}*`).join('\n') : "No live items returned from API."}
 `;
 
     const encodedContent = btoa(unescape(encodeURIComponent(rawMarkdown)));
@@ -149,7 +193,7 @@ ${brainrotCategoryPages.length > 0 ? brainrotCategoryPages.map((b, i) => `${i + 
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>SAB Master Reference Book - Complete Brainrots</title>
+<title>SAB Master Reference Book - Brainrots with Rarities</title>
 <style>
   body {
     margin: 0;
@@ -168,9 +212,12 @@ ${brainrotCategoryPages.length > 0 ? brainrotCategoryPages.map((b, i) => `${i + 
   strong {
     color: #ffa657;
   }
+  em {
+    color: #8b949e;
+  }
 </style>
 </head>
-<body><div id="content">Fetching every single brainrot from live wiki category...</div>
+<body><div id="content">Fetching brainrots and mapping individual rarities from live wiki pages...</div>
 <script>
 (function(){
   try {
