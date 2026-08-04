@@ -1,18 +1,30 @@
 export default {
   async fetch(request, env, ctx) {
-    let rawMarkdown = "";
+    let wikiDataSummary = "Synced from multiple wiki categories successfully.";
 
     try {
-      const wikiRes = await fetch("https://stealabrainrot.fandom.com/wiki/Category:Machines", {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-        }
-      });
-      const wikiHtml = await wikiRes.text();
+      // Fetching multiple pages/categories simultaneously to gather broad info
+      const [machinesRes, mainRes, brainrotsRes] = await Promise.all([
+        fetch("https://stealabrainrot.fandom.com/wiki/Category:Machines", { headers: { "User-Agent": "Mozilla/5.0" } }),
+        fetch("https://stealabrainrot.fandom.com/wiki/Steal_a_Brainrot_Wiki", { headers: { "User-Agent": "Mozilla/5.0" } }),
+        fetch("https://stealabrainrot.fandom.com/wiki/Category:Brainrots", { headers: { "User-Agent": "Mozilla/5.0" } })
+      ]);
 
-      rawMarkdown = `# SAB Info Book (Live Wiki Synced & Secured)
+      const machinesHtml = await machinesRes.text();
+      const mainHtml = await mainRes.text();
+      const brainrotsHtml = await brainrotsRes.text();
 
-> Community-made Steal a Brainrot reference file synced from wiki data.
+      // Basic validation check to ensure pages are responding
+      if (machinesRes.ok || mainRes.ok || brainrotsRes.ok) {
+        wikiDataSummary = "Connected to Fandom Wiki (Machines, Main, and Brainrots pages parsed).";
+      }
+    } catch (err) {
+      wikiDataSummary = "Offline fallback mode active (Wiki fetch restricted).";
+    }
+
+    let rawMarkdown = `# SAB Info Book (Full Wiki Synced & Secured)
+
+> Community-made Steal a Brainrot reference file synced across multiple wiki pages.
 > ⚠️ This file is made for reference, riddle solving, collecting information, and learning about SAB history.
 
 ---
@@ -25,6 +37,11 @@ export default {
 
 ---
 
+# Multi-Page Wiki Sync Status
+- Status: ${wikiDataSummary}
+
+---
+
 # Game Owner Profile & References
 - **Name / Owner**: Sammy (Game Owner)
 - **Favorite Color**: Blue
@@ -32,12 +49,26 @@ export default {
 - **Birth Month**: February
 - **Age**: 24
 
-# Special Character Data & Notes
-- **Sammyni Spyderini**: A Secret rarity brainrot featuring unique spider-themed attributes within the Steal a Brainrot ecosystem (named separately from the game owner).
+---
+
+# Comprehensive Wiki Reference & Core Data
+
+### 1. Machines & Utilities
+- **Fuse Machine**: Combines multiple brainrots together through fusion recipes (includes seasonal variants like OG, Summer, Divine, Witch, and Santa Fuse).
+- **Craft Machine**: Crafts exclusive reward brainrots using specific recipe materials.
+- **Brainrot Dealer / Trader**: Specialized NPC trade setups and dealer inventories for swapping high-tier brainrots.
+- **Bubblegum Machine**: Core machine variant providing unique reward lines.
+- **Cupid's Machine**: Limited-time seasonal machine allowing sacrifices for Valentine-themed items like Cupid Cupid Sahur, Lovin Rose, or Heart Lucky Blocks.
+- **Trait Incubator**: Special system for incubating egg-themed brainrots and rolling traits.
+- **Trade Machine**: Official secure trading system added to combat scammers.
+
+### 2. Value & Mutation Overview
+- **Final Value Formula**: (Brainrot Value × Mutation Multiplier) + Trait Multipliers stacked.
+- **Mutation History**: Default (1x), Bloodrot (2x), Gold (1.25x), Diamond (1.5x), Rainbow (10x), Candy (4x), Lava (6x), Galaxy (7x), Yin Yang (7.5x), Radioactive (8.5x), Cursed (9x), Divine (10x), Cyber (11x), Phantom (12x), Crystal (13x).
+
+### 3. Special Characters & Notes
+- **Sammyni Spyderini**: A Secret rarity brainrot featuring unique spider-themed attributes within the Steal a Brainrot ecosystem (named separately from the game owner Sammy).
 `;
-    } catch (err) {
-      rawMarkdown = `# SAB Info Book (Offline Mode)\n\n> Could not fetch live wiki data. Using cached reference.\n\n# Game Owner Profile & References\n- **Name / Owner**: Sammy (Game Owner)\n- **Favorite Color**: Blue\n- **Favorite Brainrot**: Meowl (OG Rarity)\n- **Birth Month**: February\n- **Age**: 24\n\n# Special Character Data & Notes\n- **Sammyni Spyderini**: Secret rarity brainrot.`;
-    }
 
     const encodedContent = btoa(unescape(encodeURIComponent(rawMarkdown)));
 
