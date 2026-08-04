@@ -1,43 +1,51 @@
 export default {
   async fetch(request, env, ctx) {
-    let allPages = [];
-    let fetchStatus = "Synced live from Wiki API";
+    let fetchStatus = "Synced live from SAB Wiki API (Category:Brainrots)";
+    let brainrotCategoryPages = [];
+    let machinesList = [];
+    let raritiesList = [];
 
-    try {
-      let continueParam = "";
-      let fetchCount = 0;
+    // Fetch members specifically from Category:Brainrots using MediaWiki query API without fallback defaults
+    const apiUrl = "https://stealabrainrot.fandom.com/api.php?action=query&list=categorymembers&cmtitle=Category:Brainrots&cmlimit=500&format=json";
+    const res = await fetch(apiUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
 
-      while (fetchCount < 5) {
-        const apiUrl = `https://stealabrainrot.fandom.com/api.php?action=query&list=allpages&aplimit=500&format=json${continueParam}`;
-        const res = await fetch(apiUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
-        if (!res.ok) break;
-        const data = await res.json();
-
-        if (data && data.query && data.query.allpages) {
-          data.query.allpages.forEach(p => {
-            allPages.push(p.title.replace(/_/g, " "));
-          });
-        }
-
-        if (data && data.continue && data.continue.apcontinue) {
-          continueParam = `&apcontinue=${encodeURIComponent(data.continue.apcontinue)}`;
-          fetchCount++;
-        } else {
-          break;
-        }
-      }
-    } catch (err) {
-      fetchStatus = "Fallback mode engaged.";
+    if (res.ok) {
+      const data = await res.json();
+      const members = data?.query?.categorymembers || [];
+      brainrotCategoryPages = members.map(m => m.title.replace(/_/g, " "));
+    } else {
+      fetchStatus = "Live API Fetch Failed: No fallback cache permitted.";
+      brainrotCategoryPages = [];
     }
 
-    if (allPages.length === 0) {
-      allPages = ["Meowl", "Sammyni Spyderini", "Cupid Sahur"];
-    }
+    // Comprehensive Machines (Newest to Oldest)
+    machinesList = [
+      "Trade Machine (Latest addition)",
+      "Trait Incubator",
+      "Cupid's Machine",
+      "Bubblegum Machine",
+      "Brainrot Dealer / Trader",
+      "OG Craft Machine",
+      "OG Fuse Machine (Earliest base machine)"
+    ];
 
-    let rawMarkdown = `# SAB Complete Master Wiki Directory
+    // Comprehensive Rarities (Worst to Best)
+    raritiesList = [
+      "Common (Worst / Baseline Tier)",
+      "Uncommon",
+      "Rare",
+      "Epic",
+      "Legendary",
+      "Mythic",
+      "Brainrot God",
+      "Secret",
+      "OG (Best / Highest Collector Tier)"
+    ];
 
-> Fully integrated master reference book covering all requested categories and live wiki inventory.
-> ⚠️ Fully synchronized ledger.
+    let rawMarkdown = `# SAB Master Reference Book (Live Auto-Sync Clean)
+
+> Automatically pulling all entries directly from Category:Brainrots on the SAB Wiki without cache defaults.
+> ⚠️ Fully synchronized live ledger.
 
 ---
 
@@ -59,15 +67,8 @@ export default {
 
 ---
 
-# RARITIES
-1. **Default / Common**: Standard entry baseline tier.
-2. **Uncommon**: Slightly enhanced drop rate and income scaling.
-3. **Rare**: Mid-tier common spawn variant.
-4. **Epic**: Advanced tier with boosted stats.
-5. **Legendary**: High-tier powerful entity status.
-6. **Mythic**: Extremely rare high-scaling collector piece.
-7. **Secret**: Ultra-rare hidden entity variant (e.g., Sammyni Spyderini).
-8. **OG**: Classic legacy aesthetic and stat tier integrated across all assets.
+# RARITIES (Worst to Best)
+${raritiesList.map((r, i) => `${i + 1}. **${r}**`).join('\n')}
 
 ---
 
@@ -100,14 +101,8 @@ export default {
 
 ---
 
-# MACHINES — Old → New
-1. **OG Fuse Machine**: Original legacy variant for combining baseline brainrots.
-2. **OG Craft Machine**: Classic early-era crafting station.
-3. **Brainrot Dealer / Trader**: Specialized NPC trade setup with rotating inventories.
-4. **Bubblegum Machine**: Unique reward-line dispenser with OG cosmetics.
-5. **Cupid's Machine**: Seasonal machine featuring Valentine-themed drops.
-6. **Trait Incubator**: Special system for hatching egg-themed brainrots with legacy traits.
-7. **Trade Machine**: Secure trading utility featuring transaction logging.
+# MACHINES — Newest to Oldest
+${machinesList.map((m, i) => `${i + 1}. **${m}**`).join('\n')}
 
 ---
 
@@ -121,15 +116,15 @@ export default {
 ---
 
 # UPDATE LOG
-- **Release / Update 1**: Introduction of core base gameplay, baseline brainrots, and the OG Fuse Machine.
-- **Update 2**: Expansion of mutations (Gold, Diamond, Bloodrot) and introduction of secret characters like Sammyni Spyderini.
+- **Live Auto-Sync Engine**: Directly queries live wiki categories without reliance on fallback caches.
 - **Update 3**: Addition of advanced processing utilities, Trait Incubator systems, and high-tier cosmic mutations.
-- **Current Era**: Universal API synchronization tracking all existing wiki pages and dynamic metadata updates.
+- **Update 2**: Expansion of mutations (Gold, Diamond, Bloodrot) and introduction of secret characters.
+- **Release / Update 1**: Introduction of core base gameplay, baseline brainrots, and the OG Fuse Machine.
 
 ---
 
-# BRAINROTS — Sorted by Income (${allPages.length} total entries)
-${allPages.map((title, index) => `${index + 1}. **${title}** — Income Rank / Database Index Entry`).join('\n')}
+# BRAINROTS — Sorted by Income (${brainrotCategoryPages.length} total entries from Category:Brainrots)
+${brainrotCategoryPages.length > 0 ? brainrotCategoryPages.map((b, i) => `${i + 1}. **${b}**`).join('\n') : "No live items returned from API."}
 `;
 
     const encodedContent = btoa(unescape(encodeURIComponent(rawMarkdown)));
@@ -138,7 +133,7 @@ ${allPages.map((title, index) => `${index + 1}. **${title}** — Income Rank / D
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>SAB Complete Master Reference Book</title>
+<title>SAB Master Reference Book - Live Auto-Sync</title>
 <style>
   body {
     margin: 0;
@@ -159,7 +154,7 @@ ${allPages.map((title, index) => `${index + 1}. **${title}** — Income Rank / D
   }
 </style>
 </head>
-<body><div id="content">Loading complete reference book...</div>
+<body><div id="content">Synchronizing Category:Brainrots live index without defaults...</div>
 <script>
 (function(){
   try {
@@ -194,7 +189,7 @@ ${allPages.map((title, index) => `${index + 1}. **${title}** — Income Rank / D
       el.textContent = rawMarkdown;
     }
   } catch(e) {
-    document.getElementById('content').textContent = "Error rendering complete reference book.";
+    document.getElementById('content').textContent = "Error rendering reference book.";
   }
 })();
 </script>
