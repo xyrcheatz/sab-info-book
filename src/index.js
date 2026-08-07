@@ -12,7 +12,7 @@ export default {
     let content = await getInfoBook(env, ctx);
     content = injectLiveDate(content);
 
-    if (url.pathname === "/raw" || url.searchParams.get("raw") === "1") {
+    if (url.pathname === "/" || url.searchParams.get("raw") === "1") {
       return new Response(content, {
         headers: {
           "content-type": "text/plain; charset=UTF-8",
