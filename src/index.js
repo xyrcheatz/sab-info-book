@@ -141,6 +141,7 @@ function decodeBase64Utf8(base64) {
 
 function injectLiveDate(content) {
   const now = new Date();
+const currentMonth = new Intl.DateTimeFormat("en-US", { month: "long" }).format(now);
 
   const date = new Intl.DateTimeFormat(
     "en-US",
@@ -195,6 +196,7 @@ function injectLiveDate(content) {
   const replacement =
 `Live Date:
 Date: ${date}
+Current Month: ${currentMonth}
 Day of Week: ${dayOfWeek}
 Day Type: ${dayType}
 Season: ${season}`;
