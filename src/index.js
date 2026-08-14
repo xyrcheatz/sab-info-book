@@ -499,7 +499,7 @@ async function syncLiveBrainrots(content, ctx) {
     If Fandom changes its HTML and our parser accidentally thinks
     hundreds of unrelated links are Brainrots, do not flood the API.
   */
-  if (needsDetails.length > 40) {
+  if (needsDetails.length > 80) {
     console.log(
       `Live Brainrot parser found ${needsDetails.length} possible new entries; refusing mass fetch.`
     );
@@ -587,59 +587,206 @@ async function collectCurrentUpdateBrainrots(ctx) {
 
   const lower = logHtml.toLowerCase();
   const currentStart = lower.indexOf('id="current_update"');
-  if (currentStart === -1) return [];
 
-  const futureStart = lower.indexOf('id="future_updates"', currentStart);
-  const pastStart = lower.indexOf('id="past_updates"', currentStart);
-
-  let currentEnd = logHtml.length;
-  for (const pos of [futureStart, pastStart]) {
-    if (pos !== -1 && pos < currentEnd) currentEnd = pos;
+  if (currentStart === -1) {
+    return [];
   }
 
-  const currentHtml = logHtml.slice(currentStart, currentEnd);
-
-  // Find the current Update page URL, including decimal sub-updates if present.
-  const updateMatch = currentHtml.match(
-    /href=["']\/wiki\/(Update_Log\/Update_[^"'#?]+)(?:#[^"']*)?["']/i
+  const futureStart = lower.indexOf(
+    'id="future_updates"',
+    currentStart
   );
 
-  if (!updateMatch) return [];
+  const pastStart = lower.indexOf(
+    'id="past_updates"',
+    currentStart
+  );
 
-  const updatePage = decodeURIComponent(updateMatch[1]);
-  const updateHtml = await getFandomParsedHtml(updatePage, ctx, 120);
+  let currentEnd = logHtml.length;
+
+  for (const pos of [futureStart, pastStart]) {
+    if (
+      pos !== -1 &&
+      pos < currentEnd
+    ) {
+      currentEnd = pos;
+    }
+  }
+
+  const currentHtml = logHtml.slice(
+    currentStart,
+    currentEnd
+  );
+
+  /*
+    Find the current update page.
+
+    Example:
+      /wiki/Update_Log/Update_61
+  */
+  const updateMatch =
+    currentHtml.match(
+      /href=["']\/wiki\/(Update_Log\/Update_[^"'#?]+)(?:#[^"']*)?["']/i
+    );
+
+  if (!updateMatch) {
+    return [];
+  }
+
+  const updatePage =
+    decodeURIComponent(
+      updateMatch[1]
+    );
+
+  const updateHtml =
+    await getFandomParsedHtml(
+      updatePage,
+      ctx,
+      120
+    );
 
   const candidates = [];
   const seen = new Set();
-  const linkRegex = /<a\b[^>]*href=["']\/wiki\/([^"'#?]+)[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi;
+
+  const rarityPattern =
+    "(?:Common|Rare|Epic|Legendary|Mythic|Brainrot\\s*God|Secret|OG)";
+
+  /*
+    Update pages list new Brainrots in a format like:
+
+      Brainrot Name   Secret   $172.5M/s
+
+    Instead of blindly accepting every wiki link on the update page,
+    only accept a link when the nearby HTML contains BOTH:
+      - a valid rarity
+      - an income ending in /s
+
+    This prevents event/machine/trait links from being mistaken for
+    Brainrots and means Update 61's full Brainrot list can be captured.
+  */
+  const linkRegex =
+    /<a\b[^>]*href=["']\/wiki\/([^"'#?]+)[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi;
+
   let match;
 
-  while ((match = linkRegex.exec(updateHtml)) !== null) {
+  while (
+    (match = linkRegex.exec(updateHtml)) !== null
+  ) {
     let page;
+
     try {
-      page = decodeURIComponent(match[1]);
+      page =
+        decodeURIComponent(
+          match[1]
+        );
     } catch {
       page = match[1];
     }
 
-    if (!isPossibleBrainrotPage(page)) continue;
+    page = page
+      .replace(/\/Gallery$/i, "")
+      .trim();
 
-    const name = cleanWikiValue(match[2]);
-    if (!name) continue;
+    if (!isPossibleBrainrotPage(page)) {
+      continue;
+    }
 
-    const key = normalizeBrainrotName(name);
-    if (!key || seen.has(key)) continue;
+    /*
+      Look at a short amount of HTML immediately after the link.
+      This is enough to see the displayed rarity/income on Update pages.
+    */
+    const nearby = updateHtml.slice(
+      match.index,
+      Math.min(
+        updateHtml.length,
+        match.index + 700
+      )
+    );
+
+    const nearbyText =
+      cleanWikiValue(nearby);
+
+    const rarityMatch =
+      nearbyText.match(
+        new RegExp(
+          `\\b(${rarityPattern})\\b`,
+          "i"
+        )
+      );
+
+    const incomeMatch =
+      nearbyText.match(
+        /\$?\s*\d+(?:\.\d+)?\s*(?:K|M|B|T|Q)?\s*\/s\b/i
+      );
+
+    if (
+      !rarityMatch ||
+      !incomeMatch
+    ) {
+      continue;
+    }
+
+    let name =
+      cleanWikiValue(
+        match[2]
+      );
+
+    if (!name) {
+      name = page
+        .replace(/_/g, " ")
+        .trim();
+    }
+
+    const key =
+      normalizeBrainrotName(name);
+
+    if (
+      !key ||
+      seen.has(key)
+    ) {
+      continue;
+    }
+
     seen.add(key);
 
     candidates.push({
       name,
       page,
-      rarity: ""
+      rarity: normalizeRarityName(
+        rarityMatch[1]
+      )
     });
   }
 
-  // Keep a hard cap so a malformed update page cannot cause a huge request burst.
-  return candidates.slice(0, 40);
+  /*
+    A real update should never need hundreds of individual Brainrot
+    page requests. Keep a high enough cap for large updates.
+  */
+  return candidates.slice(0, 80);
+}
+
+
+function normalizeRarityName(value) {
+  const text =
+    String(value || "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (
+    /^brainrot\s*god$/i.test(text)
+  ) {
+    return "Brainrot God";
+  }
+
+  if (/^common$/i.test(text)) return "Common";
+  if (/^rare$/i.test(text)) return "Rare";
+  if (/^epic$/i.test(text)) return "Epic";
+  if (/^legendary$/i.test(text)) return "Legendary";
+  if (/^mythic$/i.test(text)) return "Mythic";
+  if (/^secret$/i.test(text)) return "Secret";
+  if (/^og$/i.test(text)) return "OG";
+
+  return text;
 }
 
 
@@ -1139,7 +1286,7 @@ async function getLiveBrainrotDetails(
     ) ||
     "Unknown";
 
-  const obtain =
+  let obtain =
     extractObtainMethod(html) ||
     cleanWikiValue(
       extractInfoboxAny(
@@ -1148,11 +1295,44 @@ async function getLiveBrainrotDetails(
           "obtain",
           "obtained",
           "obtainment",
-          "method"
+          "method",
+          "source"
         ]
       )
-    ) ||
-    "Unknown";
+    );
+
+  /*
+    Newer Fandom infoboxes can store the source inside Status, e.g.:
+      Obtainable (Bee Shop)
+      Obtainable (RNG Machine)
+
+    Pull the text inside the parentheses as the Obtain method.
+  */
+  if (!obtain) {
+    const status =
+      cleanWikiValue(
+        extractInfoboxAny(
+          html,
+          [
+            "status"
+          ]
+        )
+      );
+
+    const statusObtain =
+      String(status || "").match(
+        /Obtainable\s*\(([^)]+)\)/i
+      );
+
+    if (statusObtain) {
+      obtain =
+        statusObtain[1].trim();
+    }
+  }
+
+  if (!obtain) {
+    obtain = "Unknown";
+  }
 
   const releaseRaw =
     cleanWikiValue(
@@ -1161,7 +1341,9 @@ async function getLiveBrainrotDetails(
         [
           "release",
           "released",
-          "release_date"
+          "release_date",
+          "release update",
+          "update"
         ]
       )
     );
@@ -1355,7 +1537,7 @@ function extractObtainMethod(html) {
   /*
     Usually the first meaningful linked object is the source:
       Red Carpet
-      Bee Merchant
+      Bee Shop
       RNG Machine
       Lucky Block
       Fuse Machine
@@ -1542,7 +1724,7 @@ function formatLiveBrainrot(item) {
   const lines = [
     removeApostrophes(item.name),
     `Rarity: ${item.rarity} | Income: ${item.income} | Cost: ${item.cost}`,
-    `Obtain: ${item.obtain}`
+    `Obtain: ${removeApostrophes(item.obtain)}`
   ];
 
   if (item.release) {
@@ -1559,26 +1741,70 @@ function removeStaticBrainrotBlock(
   content,
   name
 ) {
-  const escaped =
-    escapeRegex(name);
-
   /*
-    Remove only the matching static block beginning with:
-      Name
-      Rarity: ...
+    Compare normalized names rather than exact text.
 
-    and ending at the next blank line.
+    This means all of these match the same Brainrot:
+      S'more Serat
+      S’more Serat
+      Smore Serat
+
+    The displayed live name is still passed through removeApostrophes(),
+    so apostrophes are never captured in the output.
   */
-  const regex =
-    new RegExp(
-      `(?:^|\\n\\n)${escaped}\\r?\\nRarity:[\\s\\S]*?(?=\\r?\\n\\r?\\n|$)`,
-      "i"
+
+  const target =
+    normalizeBrainrotName(name)
+      .replace(/'/g, "");
+
+  const lines =
+    content
+      .replace(/\r\n/g, "\n")
+      .split("\n");
+
+  for (
+    let i = 0;
+    i < lines.length - 1;
+    i++
+  ) {
+    const candidate =
+      normalizeBrainrotName(
+        lines[i]
+      ).replace(/'/g, "");
+
+    if (
+      candidate !== target ||
+      !lines[i + 1]
+        .trim()
+        .startsWith("Rarity:")
+    ) {
+      continue;
+    }
+
+    let end = i + 1;
+
+    while (
+      end + 1 < lines.length &&
+      lines[end + 1].trim() !== ""
+    ) {
+      end++;
+    }
+
+    /*
+      Remove the entire old Brainrot block and one following blank line.
+    */
+    lines.splice(
+      i,
+      Math.min(
+        lines.length - i,
+        end - i + 2
+      )
     );
 
-  return content.replace(
-    regex,
-    ""
-  );
+    return lines.join("\n");
+  }
+
+  return content;
 }
 
 
@@ -1835,7 +2061,11 @@ function replaceMachinesSection(
     content.slice(start);
 
   const nextSectionRegex =
-    /(?:^|\r?\n)(?:LUCKY BLOCKS|UPDATE LOG|BRAINROTS|EXIST COUNTS|MUTATIONS)\b/i;
+    /(?:^|\r?\n)(?:LUCKY BLOCKS|
+RNG Machine
+Bee Shop
+
+UPDATE LOG|BRAINROTS|EXIST COUNTS|MUTATIONS)\b/i;
 
   const nextMatch =
     nextSectionRegex.exec(after);
