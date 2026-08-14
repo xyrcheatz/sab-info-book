@@ -444,6 +444,16 @@ async function syncLiveBrainrots(content, ctx) {
     })
   );
 
+  // Also discover Brainrots directly from the CURRENT update page.
+  // This catches brand-new Brainrots before the rarity list pages are updated.
+  let updateBrainrots = [];
+
+  try {
+    updateBrainrots = await collectCurrentUpdateBrainrots(ctx);
+  } catch (error) {
+    console.log("Could not discover Brainrots from current update:", error);
+  }
+
   const liveMap = new Map();
 
   for (const list of rarityResults) {
@@ -456,6 +466,17 @@ async function syncLiveBrainrots(content, ctx) {
       if (!liveMap.has(key)) {
         liveMap.set(key, item);
       }
+    }
+  }
+
+  // Add current-update candidates that were not already found on rarity pages.
+  // Rarity is intentionally blank here; the individual Brainrot page supplies it.
+  for (const item of updateBrainrots) {
+    const key = normalizeBrainrotName(item.name);
+    if (!key) continue;
+
+    if (!liveMap.has(key)) {
+      liveMap.set(key, item);
     }
   }
 
@@ -554,6 +575,71 @@ async function syncLiveBrainrots(content, ctx) {
   );
 
   return updateBrainrotTotal(content);
+}
+
+
+async function collectCurrentUpdateBrainrots(ctx) {
+  const logHtml = await getFandomParsedHtml(
+    UPDATE_LOG_PAGE,
+    ctx,
+    60
+  );
+
+  const lower = logHtml.toLowerCase();
+  const currentStart = lower.indexOf('id="current_update"');
+  if (currentStart === -1) return [];
+
+  const futureStart = lower.indexOf('id="future_updates"', currentStart);
+  const pastStart = lower.indexOf('id="past_updates"', currentStart);
+
+  let currentEnd = logHtml.length;
+  for (const pos of [futureStart, pastStart]) {
+    if (pos !== -1 && pos < currentEnd) currentEnd = pos;
+  }
+
+  const currentHtml = logHtml.slice(currentStart, currentEnd);
+
+  // Find the current Update page URL, including decimal sub-updates if present.
+  const updateMatch = currentHtml.match(
+    /href=["']\/wiki\/(Update_Log\/Update_[^"'#?]+)(?:#[^"']*)?["']/i
+  );
+
+  if (!updateMatch) return [];
+
+  const updatePage = decodeURIComponent(updateMatch[1]);
+  const updateHtml = await getFandomParsedHtml(updatePage, ctx, 120);
+
+  const candidates = [];
+  const seen = new Set();
+  const linkRegex = /<a\b[^>]*href=["']\/wiki\/([^"'#?]+)[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+
+  while ((match = linkRegex.exec(updateHtml)) !== null) {
+    let page;
+    try {
+      page = decodeURIComponent(match[1]);
+    } catch {
+      page = match[1];
+    }
+
+    if (!isPossibleBrainrotPage(page)) continue;
+
+    const name = cleanWikiValue(match[2]);
+    if (!name) continue;
+
+    const key = normalizeBrainrotName(name);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+
+    candidates.push({
+      name,
+      page,
+      rarity: ""
+    });
+  }
+
+  // Keep a hard cap so a malformed update page cannot cause a huge request burst.
+  return candidates.slice(0, 40);
 }
 
 
@@ -1445,9 +1531,16 @@ function incomeToNumber(value) {
 }
 
 
+function removeApostrophes(value) {
+  return String(value || "")
+    .replace(/[\u0027\u2018\u2019\u02BC\uFF07]/g, "")
+    .trim();
+}
+
+
 function formatLiveBrainrot(item) {
   const lines = [
-    item.name,
+    removeApostrophes(item.name),
     `Rarity: ${item.rarity} | Income: ${item.income} | Cost: ${item.cost}`,
     `Obtain: ${item.obtain}`
   ];
