@@ -2,6 +2,20 @@ const EMBEDDED_INFO_BOOK_B64 = "VGhpbmdzIGFib3V0IFNhbW15CkZhdm9yaXRlIEJyYWlucm90
 
 const EXIST_COUNT_URL = "https://sab-tracker.com/api/existcount";
 
+const FANDOM_API = "https://stealabrainrot.fandom.com/api.php";
+
+const LIVE_RARITY_PAGES = [
+  { page: "Common", rarity: "Common" },
+  { page: "Rare", rarity: "Rare" },
+  { page: "Epic", rarity: "Epic" },
+  { page: "Legendary", rarity: "Legendary" },
+  { page: "Mythic", rarity: "Mythic" },
+  { page: "Brainrot_God", rarity: "Brainrot God" },
+  { page: "Secret", rarity: "Secret" },
+  { page: "OG", rarity: "OG" }
+];
+
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -21,6 +35,15 @@ export default {
 
     // Update Date / Day / Season live.
     content = injectLiveDate(content);
+
+    // Discover newly-added Brainrots from all rarity pages.
+    // Only missing / currently-unreleased entries need individual page fetches.
+    try {
+      content = await syncLiveBrainrots(content, ctx);
+    } catch (error) {
+      console.log("Live Brainrot sync failed:", error);
+      // Keep serving the static Info Book if Fandom is unavailable.
+    }
 
     // Build rarity lookup from the brainrot database already in the book.
     const rarityMap = buildRarityMap(content);
@@ -202,7 +225,7 @@ Day Type: ${dayType}
 Season: ${season}`;
 
   const pattern =
-    /Live Date:\s*\r?\nDate:[^\r\n]*\r?\nDay of Week:[^\r\n]*\r?\nDay Type:[^\r\n]*\r?\nSeason:[^\r\n]*/i;
+    /Live Date:\s*\r?\nDate:[^\r\n]*\r?\n(?:Current Month:[^\r\n]*\r?\n)?Day of Week:[^\r\n]*\r?\nDay Type:[^\r\n]*\r?\nSeason:[^\r\n]*/i;
 
   if (pattern.test(content)) {
     return content.replace(
@@ -334,6 +357,1189 @@ function normalizeName(value) {
     .trim()
     .toLowerCase();
 }
+
+
+
+// ============================================================
+// LIVE BRAINROTS FROM FANDOM
+// ============================================================
+
+async function syncLiveBrainrots(content, ctx) {
+  /*
+    The static Info Book remains the main database.
+
+    Every request checks these live rarity pages:
+      Common
+      Rare
+      Epic
+      Legendary
+      Mythic
+      Brainrot God
+      Secret
+      OG
+
+    We DO NOT fetch hundreds of individual Brainrot pages every request.
+    Instead:
+      1. Read the 8 rarity list pages.
+      2. Compare their Brainrot names against the Info Book.
+      3. Fetch individual pages ONLY for newly discovered entries, or
+         entries currently marked "Rarity: Unreleased".
+      4. Grab Rarity / Income / Cost / Obtain / Release when available.
+      5. Put the live entries directly inside the BRAINROTS section.
+
+    This keeps Worker requests much lighter.
+  */
+
+  const existing = getExistingBrainrotEntries(content);
+
+  const rarityResults = await Promise.all(
+    LIVE_RARITY_PAGES.map(async source => {
+      try {
+        const html = await getFandomParsedHtml(
+          source.page,
+          ctx,
+          60
+        );
+
+        const names = source.rarity === "OG"
+          ? collectOgBrainrotLinks(html)
+          : collectRarityBrainrotLinks(html);
+
+        return names.map(item => ({
+          ...item,
+          rarity: source.rarity
+        }));
+      } catch (error) {
+        console.log(
+          `Could not read Fandom rarity page ${source.page}:`,
+          error
+        );
+
+        return [];
+      }
+    })
+  );
+
+  const liveMap = new Map();
+
+  for (const list of rarityResults) {
+    for (const item of list) {
+      const key = normalizeBrainrotName(item.name);
+
+      if (!key) continue;
+
+      // First valid rarity-page appearance wins.
+      if (!liveMap.has(key)) {
+        liveMap.set(key, item);
+      }
+    }
+  }
+
+  const needsDetails = [];
+
+  for (const [key, item] of liveMap) {
+    const old = existing.get(key);
+
+    if (
+      !old ||
+      old.rarity.toLowerCase() === "unreleased" ||
+      old.release.toLowerCase().includes("later today")
+    ) {
+      needsDetails.push(item);
+    }
+  }
+
+  /*
+    Safety cap:
+    If Fandom changes its HTML and our parser accidentally thinks
+    hundreds of unrelated links are Brainrots, do not flood the API.
+  */
+  if (needsDetails.length > 40) {
+    console.log(
+      `Live Brainrot parser found ${needsDetails.length} possible new entries; refusing mass fetch.`
+    );
+
+    return content;
+  }
+
+  if (needsDetails.length === 0) {
+    return updateBrainrotTotal(content);
+  }
+
+  const details = await Promise.all(
+    needsDetails.map(async item => {
+      try {
+        return await getLiveBrainrotDetails(
+          item,
+          ctx
+        );
+      } catch (error) {
+        console.log(
+          `Could not fetch Brainrot page ${item.page}:`,
+          error
+        );
+
+        return null;
+      }
+    })
+  );
+
+  const valid = details.filter(Boolean);
+
+  if (valid.length === 0) {
+    return updateBrainrotTotal(content);
+  }
+
+  /*
+    If one of our manually-added unreleased entries has now appeared
+    on Fandom, remove the old placeholder block before injecting the
+    actual live entry.
+  */
+  for (const item of valid) {
+    const old = existing.get(
+      normalizeBrainrotName(item.name)
+    );
+
+    if (
+      old &&
+      (
+        old.rarity.toLowerCase() === "unreleased" ||
+        old.release.toLowerCase().includes("later today")
+      )
+    ) {
+      content = removeStaticBrainrotBlock(
+        content,
+        item.name
+      );
+    }
+  }
+
+  valid.sort(
+    (a, b) =>
+      incomeToNumber(a.income) -
+      incomeToNumber(b.income)
+  );
+
+  const block = valid
+    .map(formatLiveBrainrot)
+    .join("\n\n");
+
+  content = insertLiveBrainrotsIntoSection(
+    content,
+    block
+  );
+
+  return updateBrainrotTotal(content);
+}
+
+
+function getExistingBrainrotEntries(content) {
+  const map = new Map();
+
+  const lines = content
+    .replace(/\r\n/g, "\n")
+    .split("\n");
+
+  for (let i = 0; i < lines.length - 1; i++) {
+    const name = lines[i].trim();
+    const rarityLine = lines[i + 1].trim();
+
+    if (
+      !name ||
+      !rarityLine.startsWith("Rarity:")
+    ) {
+      continue;
+    }
+
+    const rarityMatch = rarityLine.match(
+      /^Rarity:\s*([^|]+)/
+    );
+
+    let release = "";
+
+    for (
+      let j = i + 2;
+      j < Math.min(lines.length, i + 8);
+      j++
+    ) {
+      const line = lines[j].trim();
+
+      if (line.startsWith("Release:")) {
+        release = line.slice(
+          "Release:".length
+        ).trim();
+        break;
+      }
+
+      if (
+        j > i + 2 &&
+        lines[j + 1] &&
+        lines[j + 1].trim().startsWith("Rarity:")
+      ) {
+        break;
+      }
+    }
+
+    map.set(
+      normalizeBrainrotName(name),
+      {
+        name,
+        rarity: rarityMatch
+          ? rarityMatch[1].trim()
+          : "",
+        release
+      }
+    );
+  }
+
+  return map;
+}
+
+
+async function getFandomParsedHtml(
+  page,
+  ctx,
+  ttl = 60
+) {
+  const url = new URL(FANDOM_API);
+
+  url.searchParams.set(
+    "action",
+    "parse"
+  );
+
+  url.searchParams.set(
+    "page",
+    page
+  );
+
+  url.searchParams.set(
+    "prop",
+    "text"
+  );
+
+  url.searchParams.set(
+    "format",
+    "json"
+  );
+
+  url.searchParams.set(
+    "formatversion",
+    "2"
+  );
+
+  const data = await fetchJsonCached(
+    url.toString(),
+    ctx,
+    ttl
+  );
+
+  const html =
+    data?.parse?.text ??
+    data?.parse?.text?.["*"];
+
+  if (
+    typeof html !== "string" ||
+    !html.trim()
+  ) {
+    throw new Error(
+      `No parsed HTML returned for ${page}`
+    );
+  }
+
+  return html;
+}
+
+
+async function fetchJsonCached(
+  url,
+  ctx,
+  ttl
+) {
+  const cache = caches.default;
+
+  const cacheKey = new Request(
+    url,
+    {
+      method: "GET"
+    }
+  );
+
+  let response = await cache.match(
+    cacheKey
+  );
+
+  if (!response) {
+    response = await fetch(
+      url,
+      {
+        headers: {
+          "User-Agent":
+            "SAB-Info-Book-Worker/3.0",
+          "Accept":
+            "application/json,text/plain,*/*"
+        },
+        cf: {
+          cacheTtl: ttl,
+          cacheEverything: true
+        }
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Fandom returned HTTP ${response.status}`
+      );
+    }
+
+    if (ctx) {
+      ctx.waitUntil(
+        cache.put(
+          cacheKey,
+          response.clone()
+        )
+      );
+    }
+  }
+
+  return await response.json();
+}
+
+
+function collectRarityBrainrotLinks(html) {
+  const section = getBrainrotListSection(
+    html
+  );
+
+  return collectWikiLinksFromLists(
+    section
+  );
+}
+
+
+function collectOgBrainrotLinks(html) {
+  /*
+    The OG page also contains a large "Brainrots (in order of income)"
+    section containing non-OG Brainrots.
+
+    Only use the small "List of OG Brainrots" list.
+  */
+
+  const lower =
+    html.toLowerCase();
+
+  let position = lower.indexOf(
+    "list of"
+  );
+
+  if (position !== -1) {
+    const ogPosition = lower.indexOf(
+      "og",
+      position
+    );
+
+    const brainrotPosition =
+      lower.indexOf(
+        "brainrot",
+        position
+      );
+
+    if (
+      ogPosition !== -1 &&
+      brainrotPosition !== -1 &&
+      ogPosition <
+        brainrotPosition + 40
+    ) {
+      position = Math.min(
+        ogPosition,
+        brainrotPosition
+      );
+    }
+  }
+
+  if (position === -1) {
+    position = lower.indexOf(
+      "og brainrots"
+    );
+  }
+
+  if (position === -1) {
+    return [];
+  }
+
+  const ulStart = lower.indexOf(
+    "<ul",
+    position
+  );
+
+  if (ulStart === -1) {
+    return [];
+  }
+
+  const ulEnd = lower.indexOf(
+    "</ul>",
+    ulStart
+  );
+
+  if (ulEnd === -1) {
+    return [];
+  }
+
+  return collectWikiLinksFromLists(
+    html.slice(
+      ulStart,
+      ulEnd + 5
+    )
+  );
+}
+
+
+function getBrainrotListSection(html) {
+  const lower =
+    html.toLowerCase();
+
+  const candidates = [
+    'id="brainrots"',
+    'id="brainrots_(in_order_of_income)"',
+    "brainrots (in order of income)"
+  ];
+
+  let start = -1;
+
+  for (const candidate of candidates) {
+    start = lower.indexOf(
+      candidate
+    );
+
+    if (start !== -1) {
+      break;
+    }
+  }
+
+  /*
+    Pages such as Common/Rare/Epic can have their first list near
+    explanatory text. If a Brainrots heading isn't found, begin at
+    the first income-range heading.
+  */
+  if (start === -1) {
+    const incomeHeading =
+      lower.search(
+        /<h[234][^>]*>[\s\S]{0,300}\$/
+      );
+
+    if (incomeHeading !== -1) {
+      start = incomeHeading;
+    }
+  }
+
+  if (start === -1) {
+    return "";
+  }
+
+  /*
+    Stop at the next H2. H3 income ranges stay inside the section.
+  */
+  const nextH2 = lower.indexOf(
+    "<h2",
+    start + 20
+  );
+
+  if (nextH2 === -1) {
+    return html.slice(start);
+  }
+
+  return html.slice(
+    start,
+    nextH2
+  );
+}
+
+
+function collectWikiLinksFromLists(html) {
+  if (!html) {
+    return [];
+  }
+
+  const results = [];
+  const seen = new Set();
+
+  /*
+    Work list-item-by-list-item so we only use the FIRST wiki link
+    in each Brainrot bullet. That avoids picking links from notes.
+  */
+  const liRegex =
+    /<li\b[^>]*>([\s\S]*?)<\/li>/gi;
+
+  let liMatch;
+
+  while (
+    (liMatch = liRegex.exec(html)) !== null
+  ) {
+    const li = liMatch[1];
+
+    const linkMatch = li.match(
+      /<a\b[^>]*href="\/wiki\/([^"#?]+)"[^>]*>/i
+    );
+
+    if (!linkMatch) {
+      continue;
+    }
+
+    let page;
+
+    try {
+      page = decodeURIComponent(
+        linkMatch[1]
+      );
+    } catch {
+      page = linkMatch[1];
+    }
+
+    page = page
+      .replace(
+        /\/Gallery$/i,
+        ""
+      )
+      .trim();
+
+    if (!isPossibleBrainrotPage(page)) {
+      continue;
+    }
+
+    const name = page
+      .replace(/_/g, " ")
+      .trim();
+
+    const key =
+      normalizeBrainrotName(name);
+
+    if (
+      !key ||
+      seen.has(key)
+    ) {
+      continue;
+    }
+
+    seen.add(key);
+
+    results.push({
+      name,
+      page
+    });
+  }
+
+  return results;
+}
+
+
+function isPossibleBrainrotPage(page) {
+  if (!page) {
+    return false;
+  }
+
+  if (page.includes(":")) {
+    return false;
+  }
+
+  const bad = new Set([
+    "Brainrots",
+    "Rarities",
+    "Common",
+    "Rare",
+    "Epic",
+    "Legendary",
+    "Mythic",
+    "Brainrot_God",
+    "Secret",
+    "OG",
+    "Update_Log",
+    "Machines",
+    "Mutations",
+    "Traits",
+    "Admin_Abuse",
+    "Steal_a_Brainrot_Wiki"
+  ]);
+
+  return !bad.has(page);
+}
+
+
+async function getLiveBrainrotDetails(
+  source,
+  ctx
+) {
+  const html = await getFandomParsedHtml(
+    source.page,
+    ctx,
+    300
+  );
+
+  const pageName =
+    extractInfoboxTitle(html) ||
+    source.name;
+
+  const rarity =
+    cleanWikiValue(
+      extractInfoboxAny(
+        html,
+        [
+          "rarity"
+        ]
+      )
+    ) ||
+    source.rarity;
+
+  /*
+    Validate the fetched page against the rarity list that led to it.
+    This filters most false-positive links if Fandom changes layouts.
+  */
+  if (
+    rarity &&
+    source.rarity &&
+    normalizeBrainrotName(rarity) !==
+      normalizeBrainrotName(
+        source.rarity
+      )
+  ) {
+    return null;
+  }
+
+  const income =
+    cleanMoneyValue(
+      extractInfoboxAny(
+        html,
+        [
+          "income",
+          "money",
+          "earnings"
+        ]
+      )
+    ) ||
+    "Unknown";
+
+  const cost =
+    cleanMoneyValue(
+      extractInfoboxAny(
+        html,
+        [
+          "cost",
+          "price"
+        ]
+      )
+    ) ||
+    "Unknown";
+
+  const obtain =
+    extractObtainMethod(html) ||
+    cleanWikiValue(
+      extractInfoboxAny(
+        html,
+        [
+          "obtain",
+          "obtained",
+          "obtainment",
+          "method"
+        ]
+      )
+    ) ||
+    "Unknown";
+
+  const releaseRaw =
+    cleanWikiValue(
+      extractInfoboxAny(
+        html,
+        [
+          "release",
+          "released",
+          "release_date"
+        ]
+      )
+    );
+
+  const updateMatch =
+    String(
+      releaseRaw || ""
+    ).match(
+      /\bUpdate\s+0*(\d+(?:\.\d+)?)\b/i
+    );
+
+  const release = updateMatch
+    ? `Update ${Number(updateMatch[1])}`
+    : "";
+
+  return {
+    name: decodeHtmlEntities(
+      pageName
+    ),
+    rarity,
+    income,
+    cost,
+    obtain,
+    release
+  };
+}
+
+
+function extractInfoboxTitle(html) {
+  const patterns = [
+    /<h2\b[^>]*class="[^"]*\bpi-title\b[^"]*"[^>]*>([\s\S]*?)<\/h2>/i,
+    /<h1\b[^>]*class="[^"]*\bpi-title\b[^"]*"[^>]*>([\s\S]*?)<\/h1>/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = html.match(
+      pattern
+    );
+
+    if (match) {
+      const value =
+        cleanWikiValue(
+          match[1]
+        );
+
+      if (value) {
+        return value;
+      }
+    }
+  }
+
+  return "";
+}
+
+
+function extractInfoboxAny(
+  html,
+  sources
+) {
+  for (const source of sources) {
+    const value =
+      extractInfoboxValue(
+        html,
+        source
+      );
+
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+
+function extractInfoboxValue(
+  html,
+  source
+) {
+  const escaped =
+    escapeRegex(source);
+
+  const sourceRegex =
+    new RegExp(
+      `data-source=["']${escaped}["']`,
+      "i"
+    );
+
+  const match =
+    sourceRegex.exec(html);
+
+  if (!match) {
+    return "";
+  }
+
+  /*
+    PortableInfobox structures differ a little between pages.
+    Limit the search to a small chunk after data-source.
+  */
+  const chunk = html.slice(
+    match.index,
+    match.index + 2500
+  );
+
+  const patterns = [
+    /<div\b[^>]*class="[^"]*\bpi-data-value\b[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+    /<td\b[^>]*class="[^"]*\bpi-data-value\b[^"]*"[^>]*>([\s\S]*?)<\/td>/i
+  ];
+
+  for (const pattern of patterns) {
+    const valueMatch =
+      chunk.match(pattern);
+
+    if (valueMatch) {
+      const value =
+        cleanWikiValue(
+          valueMatch[1]
+        );
+
+      if (value) {
+        return value;
+      }
+    }
+  }
+
+  return "";
+}
+
+
+function extractObtainMethod(html) {
+  const lower =
+    html.toLowerCase();
+
+  const phrases = [
+    "is/was obtained from the following ways",
+    "is obtained from the following ways",
+    "was obtained from the following ways",
+    "obtained from the following ways"
+  ];
+
+  let start = -1;
+
+  for (const phrase of phrases) {
+    start = lower.indexOf(
+      phrase
+    );
+
+    if (start !== -1) {
+      break;
+    }
+  }
+
+  if (start === -1) {
+    return "";
+  }
+
+  const olStart =
+    lower.indexOf(
+      "<ol",
+      start
+    );
+
+  if (olStart === -1) {
+    return "";
+  }
+
+  const olEnd =
+    lower.indexOf(
+      "</ol>",
+      olStart
+    );
+
+  if (olEnd === -1) {
+    return "";
+  }
+
+  const list = html.slice(
+    olStart,
+    olEnd + 5
+  );
+
+  const firstLi =
+    list.match(
+      /<li\b[^>]*>([\s\S]*?)<\/li>/i
+    );
+
+  if (!firstLi) {
+    return "";
+  }
+
+  /*
+    Usually the first meaningful linked object is the source:
+      Red Carpet
+      Bee Merchant
+      RNG Machine
+      Lucky Block
+      Fuse Machine
+      etc.
+  */
+  const firstLink =
+    firstLi[1].match(
+      /<a\b[^>]*>([\s\S]*?)<\/a>/i
+    );
+
+  if (firstLink) {
+    const linked =
+      cleanWikiValue(
+        firstLink[1]
+      );
+
+    if (linked) {
+      return linked;
+    }
+  }
+
+  let text =
+    cleanWikiValue(
+      firstLi[1]
+    );
+
+  text = text.replace(
+    /^(?:buying|get(?:ting)?|obtained?|obtain(?:ed)?|from)\s+(?:it\s+)?(?:from\s+)?/i,
+    ""
+  );
+
+  return text
+    .replace(/[.]+$/, "")
+    .trim();
+}
+
+
+function cleanWikiValue(value) {
+  if (!value) {
+    return "";
+  }
+
+  return decodeHtmlEntities(
+    stripHtml(value)
+      .replace(/\s+/g, " ")
+      .trim()
+  );
+}
+
+
+function stripHtml(value) {
+  return String(value)
+    .replace(
+      /<br\s*\/?>/gi,
+      " "
+    )
+    .replace(
+      /<[^>]+>/g,
+      " "
+    );
+}
+
+
+function decodeHtmlEntities(value) {
+  return String(value)
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(
+      /&#(\d+);/g,
+      (_, n) =>
+        String.fromCodePoint(
+          Number(n)
+        )
+    )
+    .replace(
+      /&#x([0-9a-f]+);/gi,
+      (_, n) =>
+        String.fromCodePoint(
+          parseInt(n, 16)
+        )
+    );
+}
+
+
+function cleanMoneyValue(value) {
+  let text =
+    cleanWikiValue(value);
+
+  if (!text) {
+    return "";
+  }
+
+  /*
+    Match the user's Info Book style:
+      $600M/s -> 600M/s
+      $650B   -> 650B
+  */
+  return text
+    .replace(/\$/g, "")
+    .trim();
+}
+
+
+function normalizeBrainrotName(value) {
+  let text =
+    String(value || "");
+
+  try {
+    text =
+      decodeURIComponent(text);
+  } catch {
+    // Already decoded.
+  }
+
+  return text
+    .normalize("NFKC")
+    .replace(/_/g, " ")
+    .replace(/[’‘`]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+
+function escapeRegex(value) {
+  return String(value)
+    .replace(
+      /[.*+?^${}()|[\]\\]/g,
+      "\\$&"
+    );
+}
+
+
+function incomeToNumber(value) {
+  const text =
+    String(value || "")
+      .replace(/\$/g, "")
+      .replace(/,/g, "")
+      .replace(/\/s/gi, "")
+      .trim()
+      .toUpperCase();
+
+  const match = text.match(
+    /^(-?\d+(?:\.\d+)?)\s*([KMBTQ]?)/
+  );
+
+  if (!match) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  const number =
+    Number(match[1]);
+
+  const multipliers = {
+    "": 1,
+    K: 1e3,
+    M: 1e6,
+    B: 1e9,
+    T: 1e12,
+    Q: 1e15
+  };
+
+  return number *
+    (multipliers[
+      match[2]
+    ] || 1);
+}
+
+
+function formatLiveBrainrot(item) {
+  const lines = [
+    item.name,
+    `Rarity: ${item.rarity} | Income: ${item.income} | Cost: ${item.cost}`,
+    `Obtain: ${item.obtain}`
+  ];
+
+  if (item.release) {
+    lines.push(
+      `Release: ${item.release}`
+    );
+  }
+
+  return lines.join("\n");
+}
+
+
+function removeStaticBrainrotBlock(
+  content,
+  name
+) {
+  const escaped =
+    escapeRegex(name);
+
+  /*
+    Remove only the matching static block beginning with:
+      Name
+      Rarity: ...
+
+    and ending at the next blank line.
+  */
+  const regex =
+    new RegExp(
+      `(?:^|\\n\\n)${escaped}\\r?\\nRarity:[\\s\\S]*?(?=\\r?\\n\\r?\\n|$)`,
+      "i"
+    );
+
+  return content.replace(
+    regex,
+    ""
+  );
+}
+
+
+function insertLiveBrainrotsIntoSection(
+  content,
+  block
+) {
+  if (!block) {
+    return content;
+  }
+
+  const heading =
+    /BRAINROTS\s*[—–-]\s*Sorted by Income\s*\(\d+\s+total\)\s*\r?\n/i;
+
+  const match =
+    heading.exec(content);
+
+  if (!match) {
+    return content;
+  }
+
+  const insertAt =
+    match.index +
+    match[0].length;
+
+  const liveHeader =
+    "LIVE NEW BRAINROTS — Fandom Sync";
+
+  return (
+    content.slice(
+      0,
+      insertAt
+    ) +
+    liveHeader +
+    "\n" +
+    block +
+    "\n\n" +
+    content.slice(
+      insertAt
+    )
+  );
+}
+
+
+function updateBrainrotTotal(content) {
+  /*
+    Count all Name + Rarity lines in the BRAINROTS area.
+    This also counts newly synced Brainrots.
+  */
+  const headingRegex =
+    /BRAINROTS\s*[—–-]\s*Sorted by Income\s*\(\d+\s+total\)/i;
+
+  const match =
+    headingRegex.exec(content);
+
+  if (!match) {
+    return content;
+  }
+
+  const area =
+    content.slice(
+      match.index +
+      match[0].length
+    );
+
+  const count =
+    (
+      area.match(
+        /^Rarity:\s*/gmi
+      ) || []
+    ).length;
+
+  return content.replace(
+    headingRegex,
+    `BRAINROTS — Sorted by Income (${count} total)`
+  );
+}
+
 
 
 // ============================================================
