@@ -1774,7 +1774,10 @@ async function syncLiveUpdates(content, ctx) {
     Reads:
       https://stealabrainrot.fandom.com/wiki/Update_Log
 
-    The wiki table columns are expected to include:
+    The page contains Current, Future, and Past Update tables.
+    Current + Past are included; Future Updates are skipped.
+
+    The table columns include:
       Name | Release Date | Main Features and Description
 
     Only the update number/name and release date are written into
@@ -1807,168 +1810,157 @@ async function syncLiveUpdates(content, ctx) {
 
 
 function parseUpdateLogTable(html) {
+  /*
+    The Update Log page has separate tables for:
+      - Current Update
+      - Future Updates
+      - Past Updates
+
+    We intentionally SKIP Future Updates.
+
+    Each valid update row looks like:
+      <b>UPDATE NAME</b>
+      <a ...>Update 42</a>
+
+      Release Date:
+      March 14th, 2026
+
+    Output:
+      Update 42	ST PATRICKS	March 14, 2026
+  */
+
   const results = [];
   const seen = new Set();
 
-  const tableRegex =
-    /<table\b[^>]*>([\s\S]*?)<\/table>/gi;
+  const lower = html.toLowerCase();
 
-  let tableMatch;
+  // Locate the Current Update section.
+  const currentStart = lower.indexOf('id="current_update"');
 
-  while (
-    (tableMatch = tableRegex.exec(html)) !== null
-  ) {
-    const table =
-      tableMatch[1];
+  // Locate the Future Updates section so Current Update stops before it.
+  const futureStart = lower.indexOf('id="future_updates"');
 
-    const headerText =
-      cleanWikiValue(table)
-        .toLowerCase();
+  // Locate the Past Updates section.
+  const pastStart = lower.indexOf('id="past_updates"');
 
-    /*
-      Only inspect the actual Update Log table.
-    */
-    if (
-      !headerText.includes("release date") ||
-      !headerText.includes("name")
-    ) {
-      continue;
-    }
+  const sections = [];
 
+  if (currentStart !== -1) {
+    const currentEnd =
+      futureStart !== -1
+        ? futureStart
+        : (
+            pastStart !== -1
+              ? pastStart
+              : html.length
+          );
+
+    sections.push(
+      html.slice(
+        currentStart,
+        currentEnd
+      )
+    );
+  }
+
+  if (pastStart !== -1) {
+    sections.push(
+      html.slice(
+        pastStart
+      )
+    );
+  }
+
+  /*
+    Fallback:
+    If Fandom changes heading IDs, parse the whole document but
+    explicitly ignore rows inside the Future Updates table.
+  */
+  if (sections.length === 0) {
+    sections.push(html);
+  }
+
+  for (const section of sections) {
     const rowRegex =
       /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
 
     let rowMatch;
 
     while (
-      (rowMatch = rowRegex.exec(table)) !== null
+      (rowMatch = rowRegex.exec(section)) !== null
     ) {
-      const row =
-        rowMatch[1];
+      const row = rowMatch[1];
 
+      // Get all TD cells in this row.
       const cells = [];
+      const tdRegex =
+        /<td\b[^>]*>([\s\S]*?)<\/td>/gi;
 
-      const cellRegex =
-        /<(?:td|th)\b[^>]*>([\s\S]*?)<\/(?:td|th)>/gi;
-
-      let cellMatch;
+      let tdMatch;
 
       while (
-        (cellMatch = cellRegex.exec(row)) !== null
+        (tdMatch = tdRegex.exec(row)) !== null
       ) {
-        cells.push(
-          cleanWikiValue(
-            cellMatch[1]
-          )
-        );
+        cells.push(tdMatch[1]);
       }
 
       if (cells.length < 2) {
         continue;
       }
 
+      const nameCellHtml = cells[0];
+      const dateCellHtml = cells[1];
+
       /*
-        Different revisions of the table may put:
-          Update 42 + ST PATRICKS
-        in one cell, or separate the update number and name.
-
-        Join the first few cells and extract defensively.
+        Find the Update number directly from the update link.
+        Handles:
+          Update_01 -> Update 1
+          Update_09 -> Update 9
+          Update_52.5 -> Update 52.5
       */
-      const joined =
-        cells.slice(0, 4).join(" | ");
-
-      const updateMatch =
-        joined.match(
-          /\bUpdate\s+0*(\d+(?:\.\d+)?)\b/i
+      const updateLinkMatch =
+        nameCellHtml.match(
+          /href=["']\/wiki\/Update_Log\/Update_0*([0-9]+(?:\.[0-9]+)?)["'][^>]*>[\s\S]*?Update\s+0*([0-9]+(?:\.[0-9]+)?)[\s\S]*?<\/a>/i
         );
 
-      if (!updateMatch) {
+      if (!updateLinkMatch) {
         continue;
       }
 
+      const rawNumber =
+        updateLinkMatch[2] ||
+        updateLinkMatch[1];
+
       const updateNumber =
         normalizeUpdateNumber(
-          updateMatch[1]
+          rawNumber
         );
 
-      let updateName = "";
-      let releaseDate = "";
-
       /*
-        Find the date cell first.
+        The update name is the first <b> in the Name cell.
+        Example:
+          <b>ST PATRICKS</b>
       */
-      for (const cell of cells) {
-        const date =
-          normalizeUpdateDate(
-            cell
-          );
+      const boldMatch =
+        nameCellHtml.match(
+          /<b\b[^>]*>([\s\S]*?)<\/b>/i
+        );
 
-        if (date) {
-          releaseDate = date;
-          break;
-        }
+      if (!boldMatch) {
+        continue;
       }
 
-      /*
-        Find the update name.
-        Prefer text next to "Update N" in the same cell.
-      */
-      for (const cell of cells) {
-        if (
-          new RegExp(
-            `\\bUpdate\\s+0*${escapeRegex(updateMatch[1])}\\b`,
-            "i"
-          ).test(cell)
-        ) {
-          const cleaned =
-            cell
-              .replace(
-                new RegExp(
-                  `\\bUpdate\\s+0*${escapeRegex(updateMatch[1])}\\b`,
-                  "i"
-                ),
-                ""
-              )
-              .replace(
-                /^[\s\-–—:|]+|[\s\-–—:|]+$/g,
-                ""
-              )
-              .trim();
+      const updateName =
+        cleanWikiValue(
+          boldMatch[1]
+        );
 
-          if (
-            cleaned &&
-            !normalizeUpdateDate(cleaned)
-          ) {
-            updateName = cleaned;
-            break;
-          }
-        }
-      }
-
-      /*
-        If name is in a separate column, choose the first sensible
-        non-date, non-header cell after the Update number.
-      */
-      if (!updateName) {
-        for (const cell of cells) {
-          const lowered =
-            cell.toLowerCase();
-
-          if (
-            !cell ||
-            lowered === "name" ||
-            lowered.includes("release date") ||
-            lowered.includes("main features") ||
-            /\bUpdate\s+\d/i.test(cell) ||
-            normalizeUpdateDate(cell)
-          ) {
-            continue;
-          }
-
-          updateName = cell.trim();
-          break;
-        }
-      }
+      const releaseDate =
+        normalizeUpdateDate(
+          cleanWikiValue(
+            dateCellHtml
+          )
+        );
 
       if (
         !updateName ||
@@ -1992,19 +1984,11 @@ function parseUpdateLogTable(html) {
         date: releaseDate
       });
     }
-
-    /*
-      Once a valid update table produced entries, stop scanning
-      unrelated tables.
-    */
-    if (results.length) {
-      break;
-    }
   }
 
   /*
-    Sort numerically oldest -> newest, supporting decimals like
-    Update 52.5 and Update 52.75.
+    Oldest -> newest.
+    Number() supports decimal updates such as 52.5 / 52.75.
   */
   results.sort(
     (a, b) =>
