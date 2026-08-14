@@ -1744,7 +1744,7 @@ function replaceMachinesSection(
       : content.length;
 
   const machineBlock =
-    machines.join("\n") + "\n";
+    machines.join("\n") + "\n\n";
 
   return (
     content.slice(0, start) +
