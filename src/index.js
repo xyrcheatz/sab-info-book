@@ -1920,14 +1920,23 @@ function parseUpdateLogTable(html) {
       */
       const updateLinkMatch =
         nameCellHtml.match(
-          /href=["']\/wiki\/Update_Log\/Update_0*([0-9]+(?:\.[0-9]+)?)["'][^>]*>[\s\S]*?Update\s+0*([0-9]+(?:\.[0-9]+)?)[\s\S]*?<\/a>/i
+          /href=["']\/wiki\/Update_Log\/Update_0*([0-9]+(?:\.[0-9]+)?)(?:#Update_0*([0-9]+(?:\.[0-9]+)?))?["'][^>]*>[\s\S]*?Update\s+0*([0-9]+(?:\.[0-9]+)?)[\s\S]*?<\/a>/i
         );
 
       if (!updateLinkMatch) {
         continue;
       }
 
+      /*
+        Decimal mini-updates such as Update 52.5 and 52.75 use links like:
+          /wiki/Update_Log/Update_52#Update_52.5
+          /wiki/Update_Log/Update_52#Update_52.75
+
+        The visible link text is the most reliable number, followed by
+        the anchor number, then the base page number.
+      */
       const rawNumber =
+        updateLinkMatch[3] ||
         updateLinkMatch[2] ||
         updateLinkMatch[1];
 
