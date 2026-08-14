@@ -16,6 +16,7 @@ const LIVE_RARITY_PAGES = [
 ];
 
 const MACHINE_CATEGORY_PAGE = "Category:Machines";
+const UPDATE_LOG_PAGE = "Update_Log";
 
 const IGNORED_MACHINE_PAGES = new Set([
   "Template:Steal a Brainrot Wiki/PreloadMachineArticle"
@@ -58,6 +59,14 @@ export default {
     } catch (error) {
       console.log("Live Machine sync failed:", error);
       // Keep serving the static machine list if Fandom is unavailable.
+    }
+
+    // Refresh the Update Log live from Fandom.
+    try {
+      content = await syncLiveUpdates(content, ctx);
+    } catch (error) {
+      console.log("Live Update Log sync failed:", error);
+      // Keep serving the static Update Log if Fandom is unavailable.
     }
 
     // Build rarity lookup from the brainrot database already in the book.
@@ -1750,6 +1759,364 @@ function replaceMachinesSection(
     content.slice(0, start) +
     machineBlock +
     content.slice(end)
+  );
+}
+
+
+
+
+// ============================================================
+// LIVE UPDATE LOG FROM FANDOM
+// ============================================================
+
+async function syncLiveUpdates(content, ctx) {
+  /*
+    Reads:
+      https://stealabrainrot.fandom.com/wiki/Update_Log
+
+    The wiki table columns are expected to include:
+      Name | Release Date | Main Features and Description
+
+    Only the update number/name and release date are written into
+    the Info Book, using this exact style:
+
+      Update 42	ST PATRICKS	March 14, 2026
+
+    The description/features column is intentionally ignored.
+  */
+
+  const html = await getFandomParsedHtml(
+    UPDATE_LOG_PAGE,
+    ctx,
+    60
+  );
+
+  const updates = parseUpdateLogTable(
+    html
+  );
+
+  if (!updates.length) {
+    return content;
+  }
+
+  return replaceUpdateLogSection(
+    content,
+    updates
+  );
+}
+
+
+function parseUpdateLogTable(html) {
+  const results = [];
+  const seen = new Set();
+
+  const tableRegex =
+    /<table\b[^>]*>([\s\S]*?)<\/table>/gi;
+
+  let tableMatch;
+
+  while (
+    (tableMatch = tableRegex.exec(html)) !== null
+  ) {
+    const table =
+      tableMatch[1];
+
+    const headerText =
+      cleanWikiValue(table)
+        .toLowerCase();
+
+    /*
+      Only inspect the actual Update Log table.
+    */
+    if (
+      !headerText.includes("release date") ||
+      !headerText.includes("name")
+    ) {
+      continue;
+    }
+
+    const rowRegex =
+      /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
+
+    let rowMatch;
+
+    while (
+      (rowMatch = rowRegex.exec(table)) !== null
+    ) {
+      const row =
+        rowMatch[1];
+
+      const cells = [];
+
+      const cellRegex =
+        /<(?:td|th)\b[^>]*>([\s\S]*?)<\/(?:td|th)>/gi;
+
+      let cellMatch;
+
+      while (
+        (cellMatch = cellRegex.exec(row)) !== null
+      ) {
+        cells.push(
+          cleanWikiValue(
+            cellMatch[1]
+          )
+        );
+      }
+
+      if (cells.length < 2) {
+        continue;
+      }
+
+      /*
+        Different revisions of the table may put:
+          Update 42 + ST PATRICKS
+        in one cell, or separate the update number and name.
+
+        Join the first few cells and extract defensively.
+      */
+      const joined =
+        cells.slice(0, 4).join(" | ");
+
+      const updateMatch =
+        joined.match(
+          /\bUpdate\s+0*(\d+(?:\.\d+)?)\b/i
+        );
+
+      if (!updateMatch) {
+        continue;
+      }
+
+      const updateNumber =
+        normalizeUpdateNumber(
+          updateMatch[1]
+        );
+
+      let updateName = "";
+      let releaseDate = "";
+
+      /*
+        Find the date cell first.
+      */
+      for (const cell of cells) {
+        const date =
+          normalizeUpdateDate(
+            cell
+          );
+
+        if (date) {
+          releaseDate = date;
+          break;
+        }
+      }
+
+      /*
+        Find the update name.
+        Prefer text next to "Update N" in the same cell.
+      */
+      for (const cell of cells) {
+        if (
+          new RegExp(
+            `\\bUpdate\\s+0*${escapeRegex(updateMatch[1])}\\b`,
+            "i"
+          ).test(cell)
+        ) {
+          const cleaned =
+            cell
+              .replace(
+                new RegExp(
+                  `\\bUpdate\\s+0*${escapeRegex(updateMatch[1])}\\b`,
+                  "i"
+                ),
+                ""
+              )
+              .replace(
+                /^[\s\-–—:|]+|[\s\-–—:|]+$/g,
+                ""
+              )
+              .trim();
+
+          if (
+            cleaned &&
+            !normalizeUpdateDate(cleaned)
+          ) {
+            updateName = cleaned;
+            break;
+          }
+        }
+      }
+
+      /*
+        If name is in a separate column, choose the first sensible
+        non-date, non-header cell after the Update number.
+      */
+      if (!updateName) {
+        for (const cell of cells) {
+          const lowered =
+            cell.toLowerCase();
+
+          if (
+            !cell ||
+            lowered === "name" ||
+            lowered.includes("release date") ||
+            lowered.includes("main features") ||
+            /\bUpdate\s+\d/i.test(cell) ||
+            normalizeUpdateDate(cell)
+          ) {
+            continue;
+          }
+
+          updateName = cell.trim();
+          break;
+        }
+      }
+
+      if (
+        !updateName ||
+        !releaseDate
+      ) {
+        continue;
+      }
+
+      const key =
+        `Update ${updateNumber}`;
+
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+
+      results.push({
+        number: updateNumber,
+        name: updateName,
+        date: releaseDate
+      });
+    }
+
+    /*
+      Once a valid update table produced entries, stop scanning
+      unrelated tables.
+    */
+    if (results.length) {
+      break;
+    }
+  }
+
+  /*
+    Sort numerically oldest -> newest, supporting decimals like
+    Update 52.5 and Update 52.75.
+  */
+  results.sort(
+    (a, b) =>
+      Number(a.number) -
+      Number(b.number)
+  );
+
+  return results;
+}
+
+
+function normalizeUpdateNumber(value) {
+  const number =
+    Number(
+      String(value)
+        .replace(/^0+/, "") || "0"
+    );
+
+  if (!Number.isFinite(number)) {
+    return String(value);
+  }
+
+  return String(number);
+}
+
+
+function normalizeUpdateDate(value) {
+  const text =
+    String(value || "")
+      .replace(
+        /(\d+)(st|nd|rd|th)\b/gi,
+        "$1"
+      )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const match =
+    text.match(
+      /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i
+    );
+
+  if (!match) {
+    return "";
+  }
+
+  const month =
+    match[1].charAt(0).toUpperCase() +
+    match[1].slice(1).toLowerCase();
+
+  const day =
+    Number(match[2]);
+
+  const year =
+    match[3];
+
+  return `${month} ${day}, ${year}`;
+}
+
+
+function replaceUpdateLogSection(
+  content,
+  updates
+) {
+  const headingRegex =
+    /UPDATE LOG\s*\r?\n(?:-+\s*\r?\n)?/i;
+
+  const headingMatch =
+    headingRegex.exec(content);
+
+  if (!headingMatch) {
+    return content;
+  }
+
+  const start =
+    headingMatch.index +
+    headingMatch[0].length;
+
+  const after =
+    content.slice(start);
+
+  /*
+    The next major section after UPDATE LOG is normally BRAINROTS.
+  */
+  const nextSectionRegex =
+    /(?:^|\r?\n)BRAINROTS\s*[—–-]/i;
+
+  const nextMatch =
+    nextSectionRegex.exec(after);
+
+  const end =
+    nextMatch
+      ? start + nextMatch.index
+      : content.length;
+
+  const updateLines =
+    updates
+      .map(
+        item =>
+          `Update ${item.number}\t${item.name}\t${item.date}`
+      )
+      .join("\n");
+
+  return (
+    content.slice(
+      0,
+      start
+    ) +
+    updateLines +
+    "\n\n" +
+    content.slice(
+      end
+    )
   );
 }
 
