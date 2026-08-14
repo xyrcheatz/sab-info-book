@@ -15,6 +15,13 @@ const LIVE_RARITY_PAGES = [
   { page: "OG", rarity: "OG" }
 ];
 
+const MACHINE_CATEGORY_PAGE = "Category:Machines";
+
+const IGNORED_MACHINE_PAGES = new Set([
+  "Template:Steal a Brainrot Wiki/PreloadMachineArticle"
+]);
+
+
 
 export default {
   async fetch(request, env, ctx) {
@@ -43,6 +50,14 @@ export default {
     } catch (error) {
       console.log("Live Brainrot sync failed:", error);
       // Keep serving the static Info Book if Fandom is unavailable.
+    }
+
+    // Discover Machines live from Fandom's Category:Machines page.
+    try {
+      content = await syncLiveMachines(content, ctx);
+    } catch (error) {
+      console.log("Live Machine sync failed:", error);
+      // Keep serving the static machine list if Fandom is unavailable.
     }
 
     // Build rarity lookup from the brainrot database already in the book.
@@ -1537,6 +1552,204 @@ function updateBrainrotTotal(content) {
   return content.replace(
     headingRegex,
     `BRAINROTS — Sorted by Income (${count} total)`
+  );
+}
+
+
+
+
+// ============================================================
+// LIVE MACHINES FROM FANDOM
+// ============================================================
+
+async function syncLiveMachines(content, ctx) {
+  /*
+    Pulls the machine category live from:
+      https://stealabrainrot.fandom.com/wiki/Category:Machines
+
+    It ignores:
+      Template:Steal a Brainrot Wiki/PreloadMachineArticle
+
+    The live machine names replace the contents of the existing:
+      MACHINES — Old → New
+    section.
+
+    This uses the MediaWiki categorymembers API instead of scraping
+    the category HTML, which is more reliable for category pages.
+  */
+
+  const machines = await getMachineCategoryMembers(ctx);
+
+  if (!machines.length) {
+    return content;
+  }
+
+  return replaceMachinesSection(
+    content,
+    machines
+  );
+}
+
+
+async function getMachineCategoryMembers(ctx) {
+  const results = [];
+  const seen = new Set();
+
+  let cmcontinue = "";
+
+  for (let page = 0; page < 10; page++) {
+    const url = new URL(FANDOM_API);
+
+    url.searchParams.set(
+      "action",
+      "query"
+    );
+
+    url.searchParams.set(
+      "list",
+      "categorymembers"
+    );
+
+    url.searchParams.set(
+      "cmtitle",
+      MACHINE_CATEGORY_PAGE
+    );
+
+    url.searchParams.set(
+      "cmlimit",
+      "500"
+    );
+
+    /*
+      Include both normal articles and template namespace entries,
+      then explicitly ignore the one template requested by the user.
+    */
+    url.searchParams.set(
+      "cmnamespace",
+      "0|10"
+    );
+
+    url.searchParams.set(
+      "format",
+      "json"
+    );
+
+    url.searchParams.set(
+      "formatversion",
+      "2"
+    );
+
+    if (cmcontinue) {
+      url.searchParams.set(
+        "cmcontinue",
+        cmcontinue
+      );
+    }
+
+    const data = await fetchJsonCached(
+      url.toString(),
+      ctx,
+      60
+    );
+
+    const members =
+      data?.query?.categorymembers || [];
+
+    for (const member of members) {
+      let title = String(
+        member?.title || ""
+      ).trim();
+
+      if (!title) {
+        continue;
+      }
+
+      if (
+        IGNORED_MACHINE_PAGES.has(title)
+      ) {
+        continue;
+      }
+
+      /*
+        Ignore all other non-article namespaces too.
+        The requested preload template is therefore definitely excluded,
+        while the machine list itself stays clean.
+      */
+      if (
+        typeof member.ns === "number" &&
+        member.ns !== 0
+      ) {
+        continue;
+      }
+
+      title = title
+        .replace(/_/g, " ")
+        .trim();
+
+      const key =
+        title.toLowerCase();
+
+      if (
+        seen.has(key)
+      ) {
+        continue;
+      }
+
+      seen.add(key);
+      results.push(title);
+    }
+
+    cmcontinue =
+      data?.continue?.cmcontinue || "";
+
+    if (!cmcontinue) {
+      break;
+    }
+  }
+
+  return results;
+}
+
+
+function replaceMachinesSection(
+  content,
+  machines
+) {
+  const headingRegex =
+    /MACHINES\s*[—–-]\s*Old\s*→\s*New\s*\r?\n/i;
+
+  const headingMatch =
+    headingRegex.exec(content);
+
+  if (!headingMatch) {
+    return content;
+  }
+
+  const start =
+    headingMatch.index +
+    headingMatch[0].length;
+
+  const after =
+    content.slice(start);
+
+  const nextSectionRegex =
+    /(?:^|\r?\n)(?:LUCKY BLOCKS|UPDATE LOG|BRAINROTS|EXIST COUNTS|MUTATIONS)\b/i;
+
+  const nextMatch =
+    nextSectionRegex.exec(after);
+
+  const end =
+    nextMatch
+      ? start + nextMatch.index
+      : content.length;
+
+  const machineBlock =
+    machines.join("\n") + "\n";
+
+  return (
+    content.slice(0, start) +
+    machineBlock +
+    content.slice(end)
   );
 }
 
