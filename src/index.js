@@ -2477,45 +2477,51 @@ async function syncLiveTraits(content, ctx) {
 
 function parseTraitsPage(html) {
   const results = [];
-  const lower = html.toLowerCase();
 
-  const traitsStart =
-    lower.indexOf('id="traits"');
+  /*
+    Do NOT depend on id="traits".
+    Fandom can change/remove section IDs in API parsed HTML.
 
-  if (traitsStart === -1) {
-    return results;
-  }
-
-  const triviaStart =
-    lower.indexOf(
-      'id="trivia"',
-      traitsStart
-    );
-
-  const section =
-    triviaStart !== -1
-      ? html.slice(traitsStart, triviaStart)
-      : html.slice(traitsStart);
-
+    Instead, scan every fandom-table and keep only tables whose
+    header contains both "Name" and "Multiplier".
+  */
   const tableRegex =
     /<table\b[^>]*class=["'][^"']*\bfandom-table\b[^"']*["'][^>]*>([\s\S]*?)<\/table>/gi;
 
   let tableMatch;
 
   while (
-    (tableMatch = tableRegex.exec(section)) !== null
+    (tableMatch = tableRegex.exec(html)) !== null
   ) {
     const tableHtml = tableMatch[1];
+
+    const headerText =
+      cleanWikiValue(
+        tableHtml.match(
+          /<tr\b[^>]*>([\s\S]*?)<\/tr>/i
+        )?.[1] || ""
+      ).toLowerCase();
+
+    if (
+      !headerText.includes("name") ||
+      !headerText.includes("multiplier")
+    ) {
+      continue;
+    }
 
     const captionMatch =
       tableHtml.match(
         /<caption\b[^>]*>([\s\S]*?)<\/caption>/i
       );
 
-    const groupName =
+    let groupName =
       captionMatch
         ? cleanWikiValue(captionMatch[1])
         : "Traits";
+
+    groupName = groupName
+      .replace(/\s+Traits$/i, "")
+      .trim();
 
     const traits = [];
     const rowRegex =
@@ -2528,6 +2534,7 @@ function parseTraitsPage(html) {
     ) {
       const rowHtml = rowMatch[1];
       const cells = [];
+
       const cellRegex =
         /<td\b[^>]*>([\s\S]*?)<\/td>/gi;
 
@@ -2543,42 +2550,64 @@ function parseTraitsPage(html) {
         continue;
       }
 
-      const nameCell = cells[0];
       let name = "";
 
       const traitSpan =
-        nameCell.match(
+        cells[0].match(
           /<span\b[^>]*class=["'][^"']*\btrait\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i
         );
 
       if (traitSpan) {
-        name = cleanWikiValue(
-          traitSpan[1]
-        );
+        name =
+          cleanWikiValue(
+            traitSpan[1]
+          );
       }
 
       if (!name) {
         const bold =
-          nameCell.match(
+          cells[0].match(
             /<b\b[^>]*>([\s\S]*?)<\/b>/i
           );
 
         if (bold) {
-          name = cleanWikiValue(
-            bold[1]
-          );
+          name =
+            cleanWikiValue(
+              bold[1]
+            );
         }
       }
 
       if (!name) {
+        name =
+          cleanWikiValue(
+            cells[0]
+          );
+      }
+
+      name = name.trim();
+
+      if (
+        !name ||
+        /^name$/i.test(name)
+      ) {
         continue;
       }
 
       let multiplier =
-        cleanWikiValue(cells[1])
+        cleanWikiValue(
+          cells[1]
+        )
           .replace(/×/g, "x")
           .replace(/\s+/g, "")
           .trim();
+
+      if (
+        !multiplier ||
+        !/\d/.test(multiplier)
+      ) {
+        continue;
+      }
 
       let obtain = "";
 
@@ -2598,7 +2627,7 @@ function parseTraitsPage(html) {
 
     if (traits.length) {
       results.push({
-        group: groupName,
+        group: groupName || "Other",
         traits
       });
     }
