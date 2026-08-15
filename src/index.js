@@ -17,6 +17,7 @@ const LIVE_RARITY_PAGES = [
 
 const MACHINE_CATEGORY_PAGE = "Category:Machines";
 const UPDATE_LOG_PAGE = "Update_Log";
+const TRAITS_PAGE = "Traits";
 
 const IGNORED_MACHINE_PAGES = new Set([
   "Template:Steal a Brainrot Wiki/PreloadMachineArticle"
@@ -67,6 +68,14 @@ export default {
     } catch (error) {
       console.log("Live Update Log sync failed:", error);
       // Keep serving the static Update Log if Fandom is unavailable.
+    }
+
+    // Refresh Traits live from the Fandom Traits page.
+    try {
+      content = await syncLiveTraits(content, ctx);
+    } catch (error) {
+      console.log("Live Traits sync failed:", error);
+      // Keep serving the static Traits section if Fandom is unavailable.
     }
 
     // Build rarity lookup from the brainrot database already in the book.
@@ -2448,6 +2457,308 @@ function replaceUpdateLogSection(
     content.slice(
       end
     )
+  );
+}
+
+
+
+
+// ============================================================
+// LIVE TRAITS FROM FANDOM
+// ============================================================
+
+async function syncLiveTraits(content, ctx) {
+  const html = await getFandomParsedHtml(
+    TRAITS_PAGE,
+    ctx,
+    60
+  );
+
+  const groups = parseTraitsPage(html);
+
+  if (!groups.length) {
+    return content;
+  }
+
+  return replaceTraitsSection(
+    content,
+    groups
+  );
+}
+
+
+function parseTraitsPage(html) {
+  const results = [];
+  const lower = html.toLowerCase();
+
+  const traitsStart =
+    lower.indexOf('id="traits"');
+
+  if (traitsStart === -1) {
+    return results;
+  }
+
+  const triviaStart =
+    lower.indexOf(
+      'id="trivia"',
+      traitsStart
+    );
+
+  const section =
+    triviaStart !== -1
+      ? html.slice(traitsStart, triviaStart)
+      : html.slice(traitsStart);
+
+  const tableRegex =
+    /<table\b[^>]*class=["'][^"']*\bfandom-table\b[^"']*["'][^>]*>([\s\S]*?)<\/table>/gi;
+
+  let tableMatch;
+
+  while (
+    (tableMatch = tableRegex.exec(section)) !== null
+  ) {
+    const tableHtml = tableMatch[1];
+
+    const captionMatch =
+      tableHtml.match(
+        /<caption\b[^>]*>([\s\S]*?)<\/caption>/i
+      );
+
+    const groupName =
+      captionMatch
+        ? cleanWikiValue(captionMatch[1])
+        : "Traits";
+
+    const traits = [];
+    const rowRegex =
+      /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
+
+    let rowMatch;
+
+    while (
+      (rowMatch = rowRegex.exec(tableHtml)) !== null
+    ) {
+      const rowHtml = rowMatch[1];
+      const cells = [];
+      const cellRegex =
+        /<td\b[^>]*>([\s\S]*?)<\/td>/gi;
+
+      let cellMatch;
+
+      while (
+        (cellMatch = cellRegex.exec(rowHtml)) !== null
+      ) {
+        cells.push(cellMatch[1]);
+      }
+
+      if (cells.length < 2) {
+        continue;
+      }
+
+      const nameCell = cells[0];
+      let name = "";
+
+      const traitSpan =
+        nameCell.match(
+          /<span\b[^>]*class=["'][^"']*\btrait\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i
+        );
+
+      if (traitSpan) {
+        name = cleanWikiValue(
+          traitSpan[1]
+        );
+      }
+
+      if (!name) {
+        const bold =
+          nameCell.match(
+            /<b\b[^>]*>([\s\S]*?)<\/b>/i
+          );
+
+        if (bold) {
+          name = cleanWikiValue(
+            bold[1]
+          );
+        }
+      }
+
+      if (!name) {
+        continue;
+      }
+
+      let multiplier =
+        cleanWikiValue(cells[1])
+          .replace(/×/g, "x")
+          .replace(/\s+/g, "")
+          .trim();
+
+      let obtain = "";
+
+      if (cells.length >= 3) {
+        obtain =
+          extractTraitObtain(
+            cells[2]
+          );
+      }
+
+      traits.push({
+        name,
+        multiplier,
+        obtain
+      });
+    }
+
+    if (traits.length) {
+      results.push({
+        group: groupName,
+        traits
+      });
+    }
+  }
+
+  return results;
+}
+
+
+function extractTraitObtain(cellHtml) {
+  const bold =
+    cellHtml.match(
+      /<b\b[^>]*>([\s\S]*?)<\/b>/i
+    );
+
+  let value = "";
+
+  if (bold) {
+    value = cleanWikiValue(
+      bold[1]
+    );
+  }
+
+  if (!value) {
+    value = cleanWikiValue(
+      cellHtml
+    );
+  }
+
+  return value
+    .replace(/[.]+$/, "")
+    .replace(/\s*\/\s*/g, " / ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+
+function buildTraitsSection(groups) {
+  const lines = [
+    "TRAITS — Live"
+  ];
+
+  for (const group of groups) {
+    lines.push("");
+    lines.push(group.group);
+
+    for (const trait of group.traits) {
+      let line = trait.name;
+
+      if (trait.multiplier) {
+        line += ` — ${trait.multiplier}`;
+      }
+
+      if (trait.obtain) {
+        line += ` — ${trait.obtain}`;
+      }
+
+      lines.push(line);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+
+function replaceTraitsSection(
+  content,
+  groups
+) {
+  const newSection =
+    buildTraitsSection(groups);
+
+  const headingRegex =
+    /(?:^|\r?\n)TRAITS(?:\s*[—–-][^\r\n]*)?\s*\r?\n/i;
+
+  const match =
+    headingRegex.exec(content);
+
+  if (match) {
+    const startsWithNewline =
+      match[0].startsWith("\r\n")
+        ? 2
+        : (
+            match[0].startsWith("\n")
+              ? 1
+              : 0
+          );
+
+    const start =
+      match.index + startsWithNewline;
+
+    const afterHeading =
+      start +
+      (
+        match[0].length -
+        startsWithNewline
+      );
+
+    const after =
+      content.slice(afterHeading);
+
+    const nextSectionRegex =
+      /(?:^|\r?\n)(?:MUTATIONS|MACHINES|LUCKY BLOCKS|UPDATE LOG|BRAINROTS|EXIST COUNTS|RARITIES|DEVELOPMENT CREDITS|ADMIN WAR)\b/i;
+
+    const next =
+      nextSectionRegex.exec(after);
+
+    const end =
+      next
+        ? afterHeading + next.index
+        : content.length;
+
+    return (
+      content.slice(0, start) +
+      newSection +
+      "\n\n" +
+      content.slice(end).replace(/^\s+/, "")
+    );
+  }
+
+  const mutationsRegex =
+    /(?:^|\r?\n)MUTATIONS\s*[—–-]/i;
+
+  const mutationMatch =
+    mutationsRegex.exec(content);
+
+  if (mutationMatch) {
+    const insertAt =
+      mutationMatch.index +
+      (
+        content[mutationMatch.index] === "\n"
+          ? 1
+          : 0
+      );
+
+    return (
+      content.slice(0, insertAt) +
+      newSection +
+      "\n\n" +
+      content.slice(insertAt)
+    );
+  }
+
+  return (
+    content.trimEnd() +
+    "\n\n" +
+    newSection +
+    "\n"
   );
 }
 
