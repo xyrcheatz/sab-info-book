@@ -2638,12 +2638,21 @@ function extractTraitObtain(cellHtml) {
 
 function buildTraitsSection(groups) {
   const lines = [
-    "TRAITS — Live"
+    "Traits",
+    "-----------"
   ];
 
   for (const group of groups) {
     lines.push("");
-    lines.push(group.group);
+
+    let groupName = group.group;
+
+    // Make category headings read like "OG Traits", "AA Exclusive Traits", etc.
+    if (!/\btraits$/i.test(groupName)) {
+      groupName += " Traits";
+    }
+
+    lines.push(groupName);
 
     for (const trait of group.traits) {
       let line = trait.name;
